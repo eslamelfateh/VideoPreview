@@ -177,7 +177,8 @@ const stepLabel = sid => { const s = readJson(P().steps, []).find(x => x.id === 
 async function hook(kind) {
   let input = {};
   try { input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}'); } catch { /* no input */ }
-  DIR = dirFor(input.cwd || process.cwd());
+  // Claude Code passes an absolute cwd; resolve anyway so a relative one cannot point somewhere else.
+  DIR = dirFor(input.cwd ? path.resolve(process.cwd(), input.cwd) : process.cwd());
   const emit = v => { process.stdout.write(JSON.stringify(v)); process.exit(0); };
   if (kind === 'session') {
     if (!fs.existsSync(DIR)) process.exit(0);

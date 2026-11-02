@@ -14,7 +14,8 @@ let playwright;
 try { playwright = require('playwright'); } catch { playwright = require(path.join(execFileSync('npm', ['root', '-g']).toString().trim(), 'playwright')); }
 
 const LR = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../plugins/live-review/bin/live-review.mjs');
-const [video, work = fs.mkdtempSync(path.join(os.tmpdir(), 'lr-'))] = process.argv.slice(2);
+const [video, workArg = fs.mkdtempSync(path.join(os.tmpdir(), 'lr-'))] = process.argv.slice(2);
+const work = path.resolve(workArg); // hooks always get an absolute cwd from Claude Code
 const results = [];
 const check = (name, ok, extra = '') => { results.push(ok); console.log(`${ok ? '✓' : '✗'} ${name}${extra ? ` — ${extra}` : ''}`); };
 const port = String(4400 + Math.floor(Math.random() * 400));
