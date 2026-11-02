@@ -42,7 +42,8 @@ const AR: Record<string, string> = {
   // review
   'Leave a note': 'سيب ملاحظة', 'Send note': 'ابعت الملاحظة', '🔒 Keep this part as is': '🔒 سيب الجزء ده زي ما هو', 'Sent. The editor will see it on the timeline.': 'اتبعتت. المحرر هيشوفها على الـ timeline.',
   'Play the video, then drag on the ruler above the timeline to pick a moment (or use the playhead). Your note is pinned there for the editor and the AI agent.': 'شغّل الفيديو، وبعدين اسحب على المسطرة فوق الـ timeline عشان تختار لحظة (أو استخدم المؤشر). ملاحظتك هتتثبت هناك للمحرر وللـ agent.',
-  'Review': 'مراجعة',
+  'Review': 'مراجعة', 'locked': 'مقفول', 'note for agent': 'ملاحظة للـ agent', 'No video here': 'مفيش فيديو هنا', 'Drop a video anywhere to start': 'اسحب فيديو في أي مكان عشان تبدأ',
+  'before step': 'قبل الخطوة', 'no clip here': 'مفيش كليب هنا', 'Language': 'اللغة', 'range': 'جزء', 'zoom': 'زوم', 'caption': 'كابشن', 'title': 'عنوان', 'overlay': 'B-roll',
 };
 
 const KEY = 'livecut-lang';

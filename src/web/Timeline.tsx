@@ -290,7 +290,7 @@ export function Timeline({ project, assets, selection, onSelect, range, onRange,
           <button aria-label="Zoom out timeline" onClick={() => setZoom(z => Math.max(1, z / 1.6))} disabled={zoom === 1}>−</button>
           <button aria-label="Zoom in timeline" onClick={() => setZoom(z => Math.min(60, z * 1.6))}>+</button>
         </div>
-        {(['notes', 'video', 'b-roll', 'text', 'fx', 'audio'] as const).map(k => <div key={k} className="tl-label">{ICONS[k]}{k}</div>)}
+        {(['notes', 'video', 'b-roll', 'text', 'fx', 'audio'] as const).map(k => <div key={k} className="tl-label">{ICONS[k]}{t(k)}</div>)}
       </div>
       <div className="tl-scroll" ref={scroller} onScroll={e => { const v = (e.currentTarget as HTMLElement).scrollLeft; requestAnimationFrame(() => setScrollX(v)); }}>
         <div className="tl-lanes" style={{ width: Math.max(width, x(total)) }}

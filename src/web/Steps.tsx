@@ -18,7 +18,7 @@ function Copy({ text }: { text: string }) {
   return (
     <div className="copy">
       <code>{text}</code>
-      <button onClick={() => navigator.clipboard.writeText(text).then(() => { setDone(true); setTimeout(() => setDone(false), 1500); }).catch(() => {})}>{done ? 'Copied' : 'Copy'}</button>
+      <button onClick={() => navigator.clipboard.writeText(text).then(() => { setDone(true); setTimeout(() => setDone(false), 1500); }).catch(() => {})}>{done ? t("Copied") : t("Copy")}</button>
     </div>
   );
 }
@@ -38,7 +38,7 @@ function StepCard({ step, reviewing, onJump, onPeek, onHover, onError }: { step:
         <span className="num">{String(step.n).padStart(2, '0')}</span>
         <button className="tool" onClick={() => step.at != null && onJump(step.at)} title={step.at != null ? 'Jump to this point' : undefined}>{step.tool}</button>
         {step.by === 'user' && <span className="by">{t("you")}</span>}
-        <span className="state">{step.undone ? 'undone' : step.status === 'review' ? 'needs review' : step.status === 'rejected' ? 'rejected' : ''}</span>
+        <span className="state">{step.undone ? t("undone") : step.status === 'review' ? t("needs review") : step.status === 'rejected' ? t("rejected") : ''}</span>
       </div>
       <div className="summary" dir="auto">{step.summary}</div>
       {step.feedback && <div className="feedback" dir="auto">“{step.feedback}”</div>}
@@ -53,7 +53,7 @@ function StepCard({ step, reviewing, onJump, onPeek, onHover, onError }: { step:
         </form>
       ) : canReview && (
         <div className="row">
-          <button onClick={() => act(post(`/steps/${step.id}/undo`))}>{step.undone ? 'Redo' : 'Undo'}</button>
+          <button onClick={() => act(post(`/steps/${step.id}/undo`))}>{step.undone ? t("Redo") : t("Undo")}</button>
           {!step.undone && <button className="hold" onPointerDown={start} onPointerUp={end} onPointerLeave={end} onKeyDown={e => (e.key === ' ' || e.key === 'Enter') && start()} onKeyUp={end}>{t("Hold: before")}</button>}
         </div>
       )}
@@ -91,12 +91,12 @@ export const Steps = memo(function Steps({ state, onJump, onPeek, onHover, onErr
     <aside className="agent">
       <header>
         <h2>{t("Agent")}</h2>
-        <span className={`conn${agentConnected ? ' on' : ''}`}>{agentConnected ? 'connected' : 'not connected'}</span>
+        <span className={`conn${agentConnected ? ' on' : ''}`}>{agentConnected ? t("connected") : t("not connected")}</span>
         <div className="seg" role="group" aria-label="Review mode">
           <button aria-pressed={control.mode === 'live'} onClick={() => post('/control', { mode: 'live' })} title="Edits apply right away; you can undo any of them">{t("Live")}</button>
           <button aria-pressed={control.mode === 'step'} onClick={() => post('/control', { mode: 'step' })} title="The agent waits for you to accept each edit">{t("Step")}</button>
         </div>
-        <button className={`pause${control.paused ? ' on' : ''}`} onClick={() => post('/control', { paused: !control.paused })}>{control.paused ? 'Resume' : 'Pause'}</button>
+        <button className={`pause${control.paused ? ' on' : ''}`} onClick={() => post('/control', { paused: !control.paused })}>{control.paused ? t("Resume") : t("Pause")}</button>
       </header>
 
       {state.questions.map(q => <QuestionCard key={q.id} q={q} onJump={onJump} onError={onError} />)}
@@ -116,7 +116,7 @@ export const Steps = memo(function Steps({ state, onJump, onPeek, onHover, onErr
       )}
 
       <div className="composer">
-        {notes.length > 0 && <div className="queued">{notes.length} message{notes.length > 1 ? 's' : ''} waiting for the agent's next step</div>}
+        {notes.length > 0 && <div className="queued">{notes.length} {t(notes.length > 1 ? "messages waiting for the agent's next step" : "message waiting for the agent's next step")}</div>}
         <textarea id="agent-note" value={msg} onChange={e => setMsg(e.target.value)} dir="auto" rows={2}
           placeholder={t("Message the agent mid-edit, e.g. خلّي الكابشن أصفر")}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />

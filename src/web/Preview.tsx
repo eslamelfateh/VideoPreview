@@ -1,4 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { t } from './i18n';
 import { activeWord, clipAt, clipEnd, dipAt, duckFactor, layoutOf, srcAt, masterGain, POSITION_MARGIN, positionOf, presetOf, reframeAt, textsAt, TEXT_LAYOUT as L, zoomAt } from '../shared/timeline';
 import type { TextItem } from '../shared/types';
 import type { Clip, MediaAssets, Project, ZoomEffect } from '../shared/types';
@@ -142,7 +143,7 @@ export const Preview = memo(function Preview({ project, assets, speech, peeking,
       {o && <BRoll clip={o} project={project} assets={assets} els={els.current} time={time} />}
       {texts.map(t => <Overlay key={t.id} t={t} time={time} scale={scale} base={base} pad={pad} H={project.height} />)}
       {dipAt(v, time) > 0 && <div className="dip" style={{ opacity: dipAt(v, time) }} />}
-      {!v && <div className="empty-frame">{project.clips.length ? 'No video here' : 'Drop a video anywhere to start'}</div>}
+      {!v && <div className="empty-frame">{project.clips.length ? t("No video here") : t("Drop a video anywhere to start")}</div>}
       {z.scale > 1.001 && <div className="badge zoom">ZOOM {z.scale.toFixed(2)}×</div>}
       {peeking && <div className="badge before">BEFORE</div>}
       {anchorFor && <div className="anchor" style={{ left: `${anchorFor.anchorX * 100}%`, top: `${anchorFor.anchorY * 100}%` }} />}

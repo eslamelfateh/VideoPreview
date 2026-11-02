@@ -103,7 +103,7 @@ function AudioSettings({ project, onEdit }: { project: Project; onEdit: Edit }) 
         onChange={e => onEdit('set_ducking', e.target.checked ? {} : { enabled: false }).catch(() => {})} /> {tr("Lower the music while people talk")}</label>
       {duck && <Slider id="duck-amount" label={tr("Music under speech")} value={duck.amount} min={-30} max={-3} step={1} format={v => `${v} dB`} onLive={v => onEdit('set_ducking', { amount: v })} />}
       <div className="row">
-        <button disabled={busy || !project.clips.length} onClick={() => normalize(-14)}>{busy ? 'Measuring…' : loud ? 'Re-measure loudness' : 'Normalize loudness (-14 LUFS)'}</button>
+        <button disabled={busy || !project.clips.length} onClick={() => normalize(-14)}>{busy ? tr("Measuring…") : loud ? tr("Re-measure loudness") : tr("Normalize loudness (-14 LUFS)")}</button>
         {loud && <button className="quiet" onClick={() => onEdit('set_loudness_off', {})}>{tr("Off")}</button>}
       </div>
       {loud && <p className="meta-line">Mix measured {loud.measured} LUFS → {loud.target} LUFS ({loud.gainDb >= 0 ? '+' : ''}{loud.gainDb} dB), peaks limited.</p>}
@@ -127,7 +127,7 @@ export const Inspector = memo(function Inspector({ project, selection, range, on
     const len = clipLen(c);
     return (
       <div className="inspector">
-        <h3><span className={`chip ${c.track}`}>{c.track === 'overlay' ? 'b-roll' : c.track}</span><span className="name">{m?.name}</span></h3>
+        <h3><span className={`chip ${c.track}`}>{tr(c.track === 'overlay' ? 'b-roll' : c.track)}</span><span className="name">{m?.name}</span></h3>
         <div className="grid3">
           <NumField id="clip-start" label={tr("Starts at")} value={c.start} min={0} onCommit={up('start')} />
           <NumField id="clip-in" label={tr("From (source)")} value={c.in} min={0} onCommit={up('in')} />
@@ -137,7 +137,7 @@ export const Inspector = memo(function Inspector({ project, selection, range, on
         {m?.hasAudio && <>
           <Slider id="clip-vol" label={tr("Volume")} value={c.volume} min={0} max={2} step={0.05} format={pct} onLive={up('volume')} />
           <div className="row">
-            {[0, 0.5, 1, 1.5].map(v => <button key={v} className={c.volume === v ? 'on' : ''} onClick={() => up('volume')(v)}>{v === 0 ? 'Mute' : pct(v)}</button>)}
+            {[0, 0.5, 1, 1.5].map(v => <button key={v} className={c.volume === v ? 'on' : ''} onClick={() => up('volume')(v)}>{v === 0 ? tr("Mute") : pct(v)}</button>)}
           </div>
           <div className="grid2">
             <Slider id="clip-fin" label={tr("Fade in")} value={c.fadeIn ?? 0} min={0} max={Math.min(3, len / 2)} step={0.1} format={secs} onLive={up('fadeIn')} />
@@ -181,17 +181,17 @@ export const Inspector = memo(function Inspector({ project, selection, range, on
         <div className="grid3">
           <NumField id="text-start" label={tr("Start")} value={t.start} min={0} onCommit={up('start')} />
           <NumField id="text-end" label={tr("End")} value={t.end} onCommit={up('end')} />
-          <label className="field" htmlFor="text-color"><span>{t.style === 'caption' ? 'Highlight' : 'Color'}</span>
+          <label className="field" htmlFor="text-color"><span>{t.style === 'caption' ? tr("Highlight") : tr("Color")}</span>
             <input id="text-color" type="color" value={t.color ?? (t.style === 'caption' ? '#f0cf6a' : '#ffffff')} onChange={e => up('color')(e.target.value)} /></label>
         </div>
         <div className="row">
           <div className="seg"><button aria-pressed={t.style === 'title'} onClick={() => up('style')('title')}>{tr("Title")}</button><button aria-pressed={t.style === 'caption'} onClick={() => up('style')('caption')}>{tr("Caption")}</button></div>
-          <div className="seg">{(['top', 'middle', 'bottom'] as const).map(p => <button key={p} aria-pressed={positionOf(t) === p} onClick={() => up('position')(p)}>{p}</button>)}</div>
+          <div className="seg">{(['top', 'middle', 'bottom'] as const).map(p => <button key={p} aria-pressed={positionOf(t) === p} onClick={() => up('position')(p)}>{tr(p)}</button>)}</div>
         </div>
         {t.style === 'caption' && <>
           <div className="presets">
             {(Object.keys(CAPTION_PRESETS) as (keyof typeof CAPTION_PRESETS)[]).map(k => (
-              <button key={k} className={`preset p-${k}${(t.preset ?? 'karaoke') === k ? ' on' : ''}`} onClick={() => up('preset')(k)}><b>Aa</b>{CAPTION_PRESETS[k].label}</button>
+              <button key={k} className={`preset p-${k}${(t.preset ?? 'karaoke') === k ? ' on' : ''}`} onClick={() => up('preset')(k)}><b>Aa</b>{tr(CAPTION_PRESETS[k].label)}</button>
             ))}
           </div>
           <button onClick={() => onEdit('set_caption_style', { preset: t.preset ?? 'karaoke', position: positionOf(t), color: t.color ?? '' })}>{tr("Use this look for all captions")}</button>
@@ -226,16 +226,16 @@ export const Inspector = memo(function Inspector({ project, selection, range, on
     const up = (k: string) => (v: unknown) => onEdit('update_note', { markerId: m.id, [k]: v });
     return (
       <div className="inspector">
-        <h3><span className={`chip note ${m.kind}`}>{m.kind === 'dont' ? 'locked' : 'note for agent'}</span><span className="name">{fmtTime(m.start)} → {fmtTime(m.end)}</span></h3>
+        <h3><span className={`chip note ${m.kind}`}>{m.kind === 'dont' ? tr("locked") : tr("note for agent")}</span><span className="name">{fmtTime(m.start)} → {fmtTime(m.end)}</span></h3>
         <div className="seg wide"><button aria-pressed={m.kind === 'do'} onClick={() => up('kind')('do')}>{tr("Do this here")}</button><button aria-pressed={m.kind === 'dont'} onClick={() => up('kind')('dont')}>{tr("Don't touch this part")}</button></div>
-        <TextBox id="note-text" label={m.kind === 'dont' ? 'Why (the agent sees this)' : 'What should the agent do here?'} value={m.text} onCommit={up('text')} />
+        <TextBox id="note-text" label={m.kind === 'dont' ? tr("Why (the agent sees this)") : tr("What should the agent do here?")} value={m.text} onCommit={up('text')} />
         <div className="grid2">
           <NumField id="note-start" label={tr("Start")} value={m.start} min={0} onCommit={up('start')} />
           <NumField id="note-end" label={tr("End")} value={m.end} onCommit={up('end')} />
         </div>
         {m.reply && <p className="reply" dir="auto">Agent: {m.reply}</p>}
         <div className="row actions">
-          {m.kind === 'do' && <button onClick={() => up('status')(m.status === 'done' ? 'open' : 'done')}>{m.status === 'done' ? 'Reopen' : 'Mark done'}</button>}
+          {m.kind === 'do' && <button onClick={() => up('status')(m.status === 'done' ? 'open' : 'done')}>{m.status === 'done' ? tr("Reopen") : tr("Mark done")}</button>}
           <button className="danger" onClick={() => { onEdit('remove_note', { markerId: m.id }); onSelect(null); }}>{tr("Delete")}</button>
         </div>
       </div>
@@ -279,7 +279,7 @@ export const Inspector = memo(function Inspector({ project, selection, range, on
       <p className="meta-line">{tr("Click anything on the timeline to edit it. Drag on the ruler to select a range, then cut it, change its volume, or leave a note for the agent.")}</p>
       <dl className="keys">
         <div><dt>Space</dt><dd>{tr("play / pause")}</dd></div>
-        <div><dt>S</dt><dd>split at playhead{under ? '' : ' (no clip here)'}</dd></div>
+        <div><dt>S</dt><dd>{tr('split at playhead')}{under ? '' : ` (${tr('no clip here')})`}</dd></div>
         <div><dt>Del</dt><dd>{tr("delete selected")}</dd></div>
         <div><dt>N</dt><dd>{tr("note for the agent here")}</dd></div>
         <div><dt>T / Z</dt><dd>{tr("add title / zoom here")}</dd></div>

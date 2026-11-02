@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { t } from './i18n';
+import { LANG, setLang, t } from './i18n';
 import { applyChanges } from '../shared/diff';
 import { clipAt, clipEnd, duration, fmtTime } from '../shared/timeline';
 import type { Marker, ProjectInfo, Step, VersionInfo } from '../shared/types';
@@ -33,7 +33,7 @@ function Projects({ projects, current, name, reviewToken, onError }: { projects:
             <span className="meta-line">{t("Anyone with it can watch this project and pin notes for the agent, but not edit.")}</span>
             {link
               ? <div className="row"><input id="review-url" readOnly value={link} aria-label={t("Review link")} onFocus={e => e.currentTarget.select()} />
-                  <button onClick={() => navigator.clipboard.writeText(link).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => (document.getElementById('review-url') as HTMLInputElement)?.select())}>{copied ? 'Copied' : 'Copy'}</button>
+                  <button onClick={() => navigator.clipboard.writeText(link).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => (document.getElementById('review-url') as HTMLInputElement)?.select())}>{copied ? t("Copied") : t("Copy")}</button>
                   <button className="quiet danger" onClick={() => act(post('/review-link/revoke'))}>{t("Turn off")}</button></div>
               : <button onClick={() => act(post('/review-link'))}>{t("Create review link")}</button>}
           </div>
@@ -43,7 +43,7 @@ function Projects({ projects, current, name, reviewToken, onError }: { projects:
           </form>
           <ul>{projects.map(p => (
             <li key={p.id} className={p.id === current ? 'current' : ''}>
-              <div><b dir="auto">{p.name}</b><span className="meta-line">{p.id === current ? 'open now' : new Date(p.updated).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</span></div>
+              <div><b dir="auto">{p.name}</b><span className="meta-line">{p.id === current ? t("open now") : new Date(p.updated).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</span></div>
               {p.id !== current && (confirm === p.id
                 ? <><button className="danger" onClick={() => { act(post(`/projects/${p.id}/delete`)); setConfirm(null); }}>{t("Delete")}</button><button onClick={() => setConfirm(null)}>{t("Keep")}</button></>
                 : <><button onClick={() => act(post(`/projects/${p.id}/open`))}>{t("Open")}</button><button className="quiet" aria-label={`Delete ${p.name}`} onClick={() => setConfirm(p.id)}>×</button></>)}
@@ -90,7 +90,7 @@ function Versions({ versions, onError }: { versions: VersionInfo[]; onError: (m:
   const act = (p: Promise<unknown>) => p.catch(e => onError(e.message));
   return (
     <div className="versions">
-      <button aria-expanded={open} onClick={() => setOpen(o => !o)}>Versions{versions.length ? ` (${versions.length})` : ''}</button>
+      <button aria-expanded={open} onClick={() => setOpen(o => !o)}>{t("Versions")}{versions.length ? ` (${versions.length})` : ''}</button>
       {open && (
         <div className="menu" role="dialog" aria-label={t("Versions")}>
           <form className="row" onSubmit={e => { e.preventDefault(); act(post('/versions', { name }).then(() => setName(''))); }}>
@@ -120,7 +120,7 @@ function TimeDisplay({ total }: { total: number }) {
 function PlayButton() {
   const playing = usePlaying();
   return (
-    <button className="play" aria-label={playing ? 'Pause' : 'Play'} onClick={() => { unlockAudio(); clock.toggle(); }}>
+    <button className="play" aria-label={playing ? t("Pause") : t("Play")} onClick={() => { unlockAudio(); clock.toggle(); }}>
       <svg viewBox="0 0 14 14">{playing ? <path d="M3 1.5h3v11H3zM8 1.5h3v11H8z" /> : <path d="M3 1.5v11l9-5.5z" />}</svg>
     </button>
   );
@@ -226,7 +226,7 @@ export function App() {
     if (selection?.kind === 'effect') edit('update_effect', { effectId: selection.id, anchorX: Math.round(x * 100) / 100, anchorY: Math.round(y * 100) / 100 }).catch(() => {});
   }, [selection, edit]);
 
-  if (!state || !project) return <div className="loading">{online ? 'Loading…' : 'Connecting to LiveCut…'}</div>;
+  if (!state || !project) return <div className="loading">{online ? t("Loading…") : t("Connecting to LiveCut…")}</div>;
   const render = state.render;
   const openNotes = project.markers.filter(m => m.kind === 'do' && m.status === 'open').length;
 
@@ -237,6 +237,7 @@ export function App() {
       onDrop={e => { e.preventDefault(); setDragging(false); if (!REVIEW) doUpload(e.dataTransfer.files); }}>
       <header className="topbar">
         <div className="brand"><span className="mark" aria-hidden="true" />LiveCut</div>
+        <button className="lang" title={t('Language')} aria-label={t('Language')} onClick={() => setLang(LANG === 'ar' ? 'en' : 'ar')}>{LANG === 'ar' ? 'EN' : 'ع'}</button>
         {REVIEW ? <span className="review-badge">Review · {project.name}</span>
           : <Projects projects={state.projects} current={state.projectId} name={project.name} reviewToken={state.reviewToken} onError={setError} />}
         <span className="meta">{project.width}×{project.height} · {project.fps}fps · {fmtTime(total)}</span>
@@ -245,9 +246,9 @@ export function App() {
         <input ref={fileInput} id="file-input" type="file" multiple accept="video/*,audio/*,image/*" hidden onChange={e => { doUpload(e.target.files); e.target.value = ''; }} />
         {!REVIEW && <>
         <Versions versions={state.versions} onError={setError} />
-        <button onClick={() => fileInput.current?.click()} disabled={uploading}>{uploading ? 'Uploading…' : 'Add media'}</button>
+        <button onClick={() => fileInput.current?.click()} disabled={uploading}>{uploading ? t("Uploading…") : t("Add media")}</button>
         {render.status === 'rendering'
-          ? <span className="progress" title={render.encoder}><span style={{ width: `${Math.round(render.progress * 100)}%` }} />Exporting {Math.round(render.progress * 100)}%</span>
+          ? <span className="progress" title={render.encoder}><span style={{ width: `${Math.round(render.progress * 100)}%` }} />{t('Exporting')} {Math.round(render.progress * 100)}%</span>
           : <>
             <button onClick={() => post('/export', { quality: 'draft' }).catch(e => setError(e.message))} disabled={!project.clips.length} title="Faster, lower quality, for checking">{t("Quick draft")}</button>
             <button className="primary" onClick={() => post('/export', { quality: 'final' }).catch(e => setError(e.message))} disabled={!project.clips.length}>{t("Export MP4")}</button>
@@ -273,7 +274,7 @@ export function App() {
             <TimeDisplay total={total} />
             {!REVIEW && <label className="follow"><input id="follow" type="checkbox" checked={follow} onChange={e => setFollow(e.target.checked)} /> {t("follow agent")}</label>}
             {openNotes > 0 && <span className="open-notes">{openNotes} note{openNotes > 1 ? 's' : ''} waiting for the agent</span>}
-            <span className={`live ${state.control.paused ? 'paused' : state.agentConnected ? 'busy' : ''}`}><b />{state.control.paused ? 'paused · you have control' : peekStep ? `before step ${peekStep.n}` : 'live preview'}</span>
+            <span className={`live ${state.control.paused ? 'paused' : state.agentConnected ? 'busy' : ''}`}><b />{state.control.paused ? t("paused · you have control") : peekStep ? `${t('before step')} ${peekStep.n}` : t("live preview")}</span>
           </div>
           <Timeline project={project} assets={state.assets} selection={selection} onSelect={onSelect} range={range} onRange={onRange} onEdit={edit} highlight={highlight} fresh={fresh} readOnly={!!REVIEW} />
           {render.status === 'error' && <div className="render-error">Export failed: {render.error}</div>}
