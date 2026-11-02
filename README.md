@@ -29,7 +29,14 @@ Built Arabic-first: Egyptian/MSA transcripts, right-to-left word-by-word karaoke
 | **Edit by hand** | Drag clips, captions and zooms to move them, drag edges to trim, split with `S`. The inspector edits every detail: volume up to 200% with fades, text and colors, zoom amount/smoothness, and you click the video to aim a zoom. The agent is told about your edits. |
 | **Point-by-point notes** | Drag on the ruler to select a range, then leave a note ("add a title here") or lock it ("don't touch this part"). The agent sees the notes, resolves them, and the server refuses agent edits inside locked ranges. |
 | **Volume** | Per clip or over any range (`set_volume`), with a volume line and waveform drawn on the timeline. |
-| **Export** | ffmpeg renders exactly what the preview shows: cuts, karaoke captions, titles, eased zooms, and mixed audio. **Quick draft** exports 2-3x faster for checking. |
+| **Pro audio** | Music ducks automatically while people talk (same curve in preview and export), loudness normalization to -14 LUFS with a peak limiter, background-noise reduction. |
+| **Captions** | Word-by-word, right to left, in five looks (karaoke, box, one word at a time, minimal, bold) at the bottom, middle or top. Preview and export match pixel for pixel. |
+| **Reframe, speed, transitions** | Landscape footage on a vertical canvas with eased crop keyframes; 0.25–4× speed with pitch kept; fades through black. Captions and zooms stay in sync. |
+| **B-roll** | Video or images over the main picture, full frame or picture-in-picture, muted by default. |
+| **Versions** | Save a cut, try another, switch back (as an undoable step). The agent can make two versions for you to pick. |
+| **Projects and review links** | Several projects on one server. A review link lets a client watch and pin notes for the agent, without editing. |
+| **Arabic interface** | ع / EN switch; panels right to left, the timeline left to right. |
+| **Export** | ffmpeg renders exactly what the preview shows, with a hardware H.264 encoder when one works (NVENC, VideoToolbox, Quick Sync) and x264 otherwise. **Quick draft** exports faster for checking. |
 
 ## Quick start (local)
 
@@ -58,7 +65,11 @@ For development with hot reload: `npm run dev`, then open http://localhost:5173.
 
 ## Transcription
 
-Captions, `find_words` and `remove_silences` need word timings. LiveCut calls any OpenAI-compatible `/audio/transcriptions` endpoint:
+Captions, `find_words` and `remove_silences` need word timings.
+
+**Local, no API key (default when no key is set):** install [faster-whisper](https://github.com/SYSTRAN/faster-whisper) on the server (`pip install faster-whisper`; the Docker image includes it). The model downloads on first use; `WHISPER_MODEL` picks it (`small` by default; `medium` / `large-v3` are more accurate for Egyptian Arabic). Audio never leaves the machine.
+
+**Or an API:** any OpenAI-compatible `/audio/transcriptions` endpoint:
 
 ```bash
 TRANSCRIBE_API_KEY=sk-... npm start                                   # OpenAI whisper-1
@@ -74,7 +85,7 @@ A self-hosted faster-whisper server with an OpenAI-compatible API works too. Age
 
 | Look and listen | Edit | Workflow |
 |---|---|---|
-| `get_project` (compact summary + the user's notes) · `list_items` (paginated, by time range) · `get_transcript` · `find_words` · `get_frame` (rendered exactly like the export) · `get_contact_sheet` (a grid of frames across a range) · `get_audio_levels` (dBFS per window) | `add_clip` · `update_clip` · `set_volume` · `split_clip` · `remove_clip` · `cut_range` · `transcribe` · `set_transcript` · `remove_silences` · `add_captions` · `add_text` · `update_text` · `remove_text` · `add_zoom` · `update_effect` · `remove_effect` · `set_canvas` · `import_media` · **`apply_edits`** (many edits as one step, all or nothing) | `resolve_note` · `ask_user` (in the editor, or through the client with MCP elicitation) · `wait_for_user` · `export_video` + `get_export_status` (returns before client timeouts, sends progress) |
+| `get_project` (compact summary + the user's notes) · `list_items` (paginated, by time range) · `get_transcript` · `find_words` · `get_frame` (rendered exactly like the export) · `get_source_frame` (whole frame with the crop window, for reframing) · `get_contact_sheet` (a grid of frames across a range) · `get_audio_levels` (dBFS per window) · `list_versions` · `list_projects` | `add_clip` · `update_clip` · `set_volume` · `split_clip` · `remove_clip` · `cut_range` · `set_speed` · `add_transition` · `add_broll` · `transcribe` · `set_transcript` · `remove_silences` · `add_captions` · `set_caption_style` · `add_text` · `update_text` · `remove_text` · `add_zoom` · `update_effect` · `remove_effect` · `set_reframe` · `set_reframe_key` · `set_ducking` · `normalize_loudness` · `set_denoise` · `set_canvas` · `import_media` · `load_version` · **`apply_edits`** (many edits as one step, all or nothing) | `resolve_note` · `ask_user` (in the editor, or through the client with MCP elicitation) · `wait_for_user` · `save_version` · `open_project` · `create_project` · `rename_project` · `get_review_link` · `export_video` + `get_export_status` (returns before client timeouts, sends progress) |
 
 - **Annotations** on every tool (`readOnlyHint`, `destructiveHint`, `idempotentHint`), so clients can auto-approve looking and ask before cutting.
 - **Resources** with subscriptions: `livecut://project`, `livecut://notes`, `livecut://transcript`, `livecut://history`. A subscribed agent hears about a new note right away.
@@ -85,7 +96,7 @@ The project is one JSON document (`src/shared/types.ts`). Every edit runs on a d
 
 ## Deploy to the cloud
 
-The server refuses to listen on a public interface without a token.
+The server refuses to listen on a public interface without a token. Ready-made configs: `fly.toml` (Fly.io, with a volume) and `render.yaml` (Render Blueprint, with a disk). The steps are at the top of each file.
 
 ```bash
 docker build -t livecut .
@@ -115,14 +126,16 @@ docker run -p 4317:4317 -v livecut-data:/data \
 | `LIVECUT_DATA` | `./data` | Media, exports, state |
 | `TRANSCRIBE_API_KEY` / `TRANSCRIBE_BASE_URL` / `TRANSCRIBE_MODEL` | OpenAI `whisper-1` | Speech-to-text |
 | `LIVECUT_WAIT_MS` | `240000` | Longest a tool call waits on Pause/review before telling the agent to call `wait_for_user` |
+| `LIVECUT_WHISPER` / `WHISPER_MODEL` / `WHISPER_PYTHON` | `auto` / `small` / `python3` | Local transcription (`off` disables it) |
+| `LIVECUT_ENCODER` | `auto` | `nvenc`, `videotoolbox`, `qsv` or `x264` to force an encoder |
 
 ## Project layout
 
 ```
 src/shared/   project types, entity diff (undo/before-after), timeline math shared by preview and export
 src/server/   Express + WebSocket server, MCP tools, step/review store, ffmpeg export, transcription
-src/web/      React editor: preview, timeline, steps panel
-scripts/      smoke-test.ts drives a running server through MCP the way an agent would
+src/web/      React editor: preview, timeline, inspector, steps panel, review page, Arabic/English
+scripts/      end-to-end tests that drive a running server like an agent and a person
 ```
 
 Check a change end to end with a running server (`npm start`):
@@ -130,18 +143,21 @@ Check a change end to end with a running server (`npm start`):
 - `npm run smoke` drives the server over MCP like an agent.
 - `node scripts/e2e.mjs <video-with-speech> [music]` drives the browser like a person (upload, sliders, dragging, notes, locks, keyboard) while an MCP client plays the agent. Needs Playwright.
 - `node scripts/mcp-test.mjs <video> [music]` checks every MCP feature (sessions, annotations, structured output, dry runs, batches, locks, frames, contact sheets, audio levels, questions, subscriptions, prompts, async export). Run the server with `LIVECUT_WAIT_MS=5000`.
+- `node scripts/features-test.mjs <video> <music>` checks the editing features against real output: proxies, transcription, ducking (measured in dB), loudness (measured in LUFS), caption styles, speed (lengths), transitions (brightness), reframing and B-roll (pixel comparison), versions. Use `WHISPER_SCRIPT=scripts/fake_whisper.py` on the server when no Whisper model is available, and `LANDSCAPE=<16:9 video>` for reframing and B-roll.
+- `node scripts/projects-test.mjs <video> <other-video>` checks projects and review links, including that a review link cannot reach the editor API or other projects' media.
 - `node scripts/oauth-test.mjs` walks the OAuth connector flow against a server with `LIVECUT_TOKEN` and `PUBLIC_URL`.
+- GitHub Actions (`.github/workflows/ci.yml`) runs all of these on every push, with synthetic test media.
 - `node scripts/perf.mjs <long-video>` is a load test: hundreds of clips and captions; it reports frame rate, stalls, edit latency and export time.
 
 Measured on a 4-core container with a 10-minute video cut into 420 clips with 420 captions and 20 zooms: playback 59 fps with no stalls at cuts, edits reach the preview in ~160 ms, the editor opens in under a second, and export runs at about 0.6x real time (final) on 4 cores.
 
 ## Status and roadmap
 
-This is an early version (0.1). Working: the full agent → live timeline → review → export loop, tested with an MCP client and a browser. Planned:
+Version 0.2. Working and tested end to end: the agent → live timeline → review → export loop, hand editing, pro audio, captions, reframing, speed, transitions, B-roll, versions, projects, review links, OAuth. Not tested yet: a real Whisper model on real Egyptian Arabic speech (tests use synthetic speech), and hardware encoders on real GPUs (only the fallback is tested). Ideas next:
 
-- Caption style presets and fonts, per-word emphasis
-- Transitions, speed ramps, B-roll and music ducking
-- Multiple projects and accounts on one server
+- Turn one long video into several short reels (strongest moments, each as a version)
+- Brand kit: logo, intro/outro, colors and fonts saved once
+- Bilingual captions and translation; accounts and S3/R2 storage
 
 Contributions are welcome. Open an issue first for big changes.
 
@@ -151,7 +167,10 @@ LiveCut محرر فيديو مفتوح المصدر. الـ AI agent، زي Clau
 - كل تعديل بيظهر **خطوة** تقدر تعملها Undo، أو تمسك **Hold: before** وتقارن قبل وبعد.
 - في **Step mode** الـ agent بيستنى موافقتك بعد كل خطوة، وتقدر ترفض وتكتبله ملاحظة.
 - **Pause** بيوقف الـ agent عشان تبص بنفسك، وتقدر تبعتله رسالة في أي وقت.
-- الكابشن العربي كلمة بكلمة، ومن اليمين للشمال، والتصدير بـ ffmpeg طالع زي الـ preview بالظبط.
+- الكابشن العربي كلمة بكلمة، ومن اليمين للشمال، بخمس ستايلات، والتصدير بـ ffmpeg طالع زي الـ preview بالظبط.
+- تعدّل بإيدك أي حاجة، وتسيب ملاحظات أو تقفل أجزاء على الـ timeline، وتوطّي وتعلّي الصوت.
+- الموسيقى بتوطى لوحدها وقت الكلام، وB-roll، وسرعة، وانتقالات، وتحويل الفيديو الأفقي لرأسي.
+- نسخ تقارن بينها، وأكتر من مشروع، ولينك مراجعة للعميل، وواجهة بالعربي.
 
 التشغيل: `npm install && npm run build && npm start`، وبعدين:
 `claude mcp add --transport http livecut http://127.0.0.1:4317/mcp`

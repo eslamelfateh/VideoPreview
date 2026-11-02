@@ -22,5 +22,5 @@ ENV HOST=0.0.0.0 \
 RUN mkdir -p /data && chown node:node /data
 VOLUME /data
 EXPOSE 4317
-USER node
-CMD ["node", "--import", "tsx", "src/server/index.ts"]
+# Hosting platforms mount the data disk owned by root: hand it to the node user, then drop root.
+CMD ["sh", "-c", "chown -R node:node /data 2>/dev/null; exec setpriv --reuid=node --regid=node --init-groups node --import tsx src/server/index.ts"]

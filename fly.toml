@@ -1,0 +1,29 @@
+# Fly.io: `fly launch --copy-config --no-deploy`, then
+#   fly volumes create livecut_data --size 20
+#   fly secrets set LIVECUT_TOKEN=$(openssl rand -hex 24) PUBLIC_URL=https://<your-app>.fly.dev
+#   fly deploy
+app = "livecut"
+primary_region = "fra"
+
+[build]
+
+[env]
+  HOST = "0.0.0.0"
+  PORT = "4317"
+  LIVECUT_DATA = "/data"
+  HF_HOME = "/data/models"
+
+[[mounts]]
+  source = "livecut_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 4317
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = "performance-2x"
+  memory = "4gb"

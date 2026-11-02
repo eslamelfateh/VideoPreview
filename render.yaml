@@ -1,0 +1,24 @@
+# Render Blueprint: New > Blueprint, pick this repo. Set LIVECUT_TOKEN and PUBLIC_URL when asked.
+services:
+  - type: web
+    name: livecut
+    runtime: docker
+    plan: standard
+    healthCheckPath: /fonts/Cairo.ttf
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: "4317"
+      - key: LIVECUT_DATA
+        value: /data
+      - key: HF_HOME
+        value: /data/models
+      - key: LIVECUT_TOKEN
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
+    disk:
+      name: livecut-data
+      mountPath: /data
+      sizeGB: 20

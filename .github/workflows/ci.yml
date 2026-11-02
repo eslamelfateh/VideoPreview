@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      LIVECUT_DATA: ${{ github.workspace }}/ci-data
+      LIVECUT_WAIT_MS: "5000"
+      WHISPER_SCRIPT: ${{ github.workspace }}/scripts/fake_whisper.py
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Install Playwright (browser tests)
+        run: npm i --no-save playwright && npx playwright install --with-deps chromium
+      - name: Make test media (synthetic speech, music, landscape)
+        run: |
+          mkdir -p ci-media
+          ffmpeg -v error -y -f lavfi -i "flite=text='Hello everyone. Today I will show you how to edit a video with one sentence. ... ... You do not need to open any program. ... The agent cuts and writes the captions while you watch everything live. ... ... That is it. Thanks for watching.':voice=slt" -af "apad=pad_dur=2" ci-media/voice.wav
+          D=$(ffprobe -v error -show_entries format=duration -of csv=p=0 ci-media/voice.wav)
+          ffmpeg -v error -y -f lavfi -i "testsrc2=s=720x1280:r=30:d=$D" -i ci-media/voice.wav -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -shortest ci-media/speech.mp4
+          ffmpeg -v error -y -f lavfi -i "sine=f=220:d=$D" -f lavfi -i "sine=f=330:d=$D" -filter_complex "amix=inputs=2,volume=0.3" ci-media/music.mp3
+          ffmpeg -v error -y -f lavfi -i "testsrc2=s=1280x720:r=30:d=8" -f lavfi -i "sine=f=300:d=8" -shortest -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac ci-media/landscape.mp4
+      - name: Start LiveCut
+        run: |
+          npm start > server.log 2>&1 &
+          for i in $(seq 60); do curl -sf localhost:4317/api/state > /dev/null && break; sleep 1; done
+      - name: Smoke test (agent over MCP)
+        run: |
+          curl -sf -F "files=@ci-media/speech.mp4" localhost:4317/api/media
+          npm run smoke
+      - name: MCP features
+        run: node scripts/mcp-test.mjs ci-media/speech.mp4 ci-media/music.mp3 ci-media
+      - name: Editing features
+        run: LANDSCAPE=ci-media/landscape.mp4 node scripts/features-test.mjs ci-media/speech.mp4 ci-media/music.mp3 ci-media
+      - name: Projects and review links
+        run: node scripts/projects-test.mjs ci-media/speech.mp4 ci-media/landscape.mp4 ci-media
+      - name: Browser + agent end to end
+        run: node scripts/e2e.mjs ci-media/speech.mp4 ci-media/music.mp3 ci-media
+      - name: Server log
+        if: always()
+        run: tail -n 200 server.log
+      - name: Screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: ci-media/*.png
+          if-no-files-found: ignore
+
+  oauth:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: npm ci
+      - name: OAuth connector flow
+        env:
+          LIVECUT_TOKEN: ci-secret-token
+          PUBLIC_URL: http://localhost:4317
+          LIVECUT_DATA: ${{ github.workspace }}/oauth-data
+        run: |
+          npm start > server.log 2>&1 &
+          for i in $(seq 60); do curl -s -o /dev/null localhost:4317/mcp && break; sleep 1; done
+          LIVECUT_URL=http://localhost:4317 node scripts/oauth-test.mjs
