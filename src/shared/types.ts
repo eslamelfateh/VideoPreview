@@ -143,8 +143,18 @@ export interface MediaAssets {
   peaks?: { file: string; perSecond: number };
 }
 
+/** A question the agent asked the user, answered in the editor. */
+export interface Question {
+  id: string;
+  text: string;
+  options?: string[];
+  at?: number;
+  time: number;
+}
+
 export interface ServerState {
   project: Project;
+  questions: Question[];
   assets: Record<string, MediaAssets>;
   steps: Step[];
   control: Control;

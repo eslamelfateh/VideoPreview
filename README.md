@@ -68,13 +68,20 @@ TRANSCRIBE_MODEL=whisper-large-v3 TRANSCRIBE_API_KEY=gsk_... npm start  # Groq
 
 A self-hosted faster-whisper server with an OpenAI-compatible API works too. Agents that already have word timings can call `set_transcript` instead.
 
-## MCP tools
+## MCP server
 
-| Read | Edit (each one is a reviewable step) |
-|---|---|
-| `get_project` (includes the user's notes) · `get_transcript` · `find_words` · `get_frame` (the agent sees a frame as an image) · `wait_for_user` | `import_media` · `set_canvas` · `add_clip` · `update_clip` · `set_volume` · `split_clip` · `remove_clip` · `cut_range` · `transcribe` · `set_transcript` · `remove_silences` · `add_captions` · `add_text` · `update_text` · `remove_text` · `add_zoom` · `update_effect` · `remove_effect` · `resolve_note` · `export_video` |
+**Tools** (every edit is a reviewable step; edit tools return structured results with the ids they created and accept `dry_run: true`):
 
-The project is one JSON document (`src/shared/types.ts`): media, clips, texts, effects, transcripts. Every edit runs on a draft, gets diffed per entity, and is stored as a step with its before/after. That is what makes undo, before/after, and reject cheap.
+| Look and listen | Edit | Workflow |
+|---|---|---|
+| `get_project` (compact summary + the user's notes) · `list_items` (paginated, by time range) · `get_transcript` · `find_words` · `get_frame` (rendered exactly like the export) · `get_contact_sheet` (a grid of frames across a range) · `get_audio_levels` (dBFS per window) | `add_clip` · `update_clip` · `set_volume` · `split_clip` · `remove_clip` · `cut_range` · `transcribe` · `set_transcript` · `remove_silences` · `add_captions` · `add_text` · `update_text` · `remove_text` · `add_zoom` · `update_effect` · `remove_effect` · `set_canvas` · `import_media` · **`apply_edits`** (many edits as one step, all or nothing) | `resolve_note` · `ask_user` (in the editor, or through the client with MCP elicitation) · `wait_for_user` · `export_video` + `get_export_status` (returns before client timeouts, sends progress) |
+
+- **Annotations** on every tool (`readOnlyHint`, `destructiveHint`, `idempotentHint`), so clients can auto-approve looking and ask before cutting.
+- **Resources** with subscriptions: `livecut://project`, `livecut://notes`, `livecut://transcript`, `livecut://history`. A subscribed agent hears about a new note right away.
+- **Prompts**: `arabic_reel`, `clean_talking_head`, `handle_my_notes`, `review_my_edit`.
+- **Locks are enforced by the server**: an agent edit that would change what plays inside a "don't touch" range is refused; content that only slides (a pause cut earlier) is fine, and locks, captions, zooms and notes move with the speech.
+
+The project is one JSON document (`src/shared/types.ts`). Every edit runs on a draft, gets diffed per entity, and is stored as a step with its before/after: that is what makes undo, before/after, reject and dry runs cheap.
 
 ## Deploy to the cloud
 
@@ -90,7 +97,8 @@ docker run -p 4317:4317 -v livecut-data:/data \
 ```
 
 - Open the editor once with `https://livecut.example.com/?token=YOUR_TOKEN`. It sets a cookie and removes the token from the address bar.
-- Connect agents with the token as a header:
+- **claude.ai (custom connector):** with `LIVECUT_TOKEN` and an `https://` `PUBLIC_URL`, LiveCut runs an OAuth server. Add `https://livecut.example.com/mcp` as a custom connector; the approval page asks for your LiveCut token, so only you can connect.
+- Connect Claude Code (or any agent that can send headers) with the token:
   ```bash
   claude mcp add --transport http livecut https://livecut.example.com/mcp --header "Authorization: Bearer YOUR_TOKEN"
   ```
@@ -121,6 +129,8 @@ Check a change end to end with a running server (`npm start`):
 
 - `npm run smoke` drives the server over MCP like an agent.
 - `node scripts/e2e.mjs <video-with-speech> [music]` drives the browser like a person (upload, sliders, dragging, notes, locks, keyboard) while an MCP client plays the agent. Needs Playwright.
+- `node scripts/mcp-test.mjs <video> [music]` checks every MCP feature (sessions, annotations, structured output, dry runs, batches, locks, frames, contact sheets, audio levels, questions, subscriptions, prompts, async export). Run the server with `LIVECUT_WAIT_MS=5000`.
+- `node scripts/oauth-test.mjs` walks the OAuth connector flow against a server with `LIVECUT_TOKEN` and `PUBLIC_URL`.
 - `node scripts/perf.mjs <long-video>` is a load test: hundreds of clips and captions; it reports frame rate, stalls, edit latency and export time.
 
 Measured on a 4-core container with a 10-minute video cut into 420 clips with 420 captions and 20 zooms: playback 59 fps with no stalls at cuts, edits reach the preview in ~160 ms, the editor opens in under a second, and export runs at about 0.6x real time (final) on 4 cores.
@@ -132,8 +142,6 @@ This is an early version (0.1). Working: the full agent → live timeline → re
 - Caption style presets and fonts, per-word emphasis
 - Transitions, speed ramps, B-roll and music ducking
 - Multiple projects and accounts on one server
-- Async export with progress for agents, batched edits, structured tool output
-- Rendered frames and contact sheets for the agent to review its own work
 
 Contributions are welcome. Open an issue first for big changes.
 

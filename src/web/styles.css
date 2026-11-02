@@ -200,6 +200,13 @@ input, textarea { font: inherit; color: var(--fg); background: #161616; border: 
 .accept { background: var(--fg); color: var(--bg); border-color: var(--fg); margin-left: auto; }
 .reject { color: var(--bad); }
 
+.question { margin: 12px 12px 0; border: 1px solid var(--warn); border-radius: 12px; background: #221d14; padding: 10px 12px; display: grid; gap: 8px; font-size: 13.5px; animation: fresh 1.2s ease-out; }
+.question p { margin: 0; font-size: 15px; }
+.question .q-top { display: flex; align-items: center; gap: 8px; color: var(--warn); font-size: 12px; }
+.question .q-top .tool { margin-left: auto; color: var(--muted); }
+.question .row { display: flex; gap: 6px; flex-wrap: wrap; }
+.question .row button { font-size: 12.5px; padding: 4px 10px; }
+.question input { flex: 1; min-width: 0; font-size: 13px; padding: 6px 9px; }
 .composer { border-top: 1px solid var(--line); padding: 10px 12px; display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
 .composer textarea { resize: none; font-size: 13.5px; }
 .queued { grid-column: 1 / -1; color: var(--warn); font-size: 12px; }

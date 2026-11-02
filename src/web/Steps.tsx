@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import type { ServerState, Step } from '../shared/types';
+import type { Question, ServerState, Step } from '../shared/types';
 import { post } from './api';
 
 interface Props {
@@ -60,6 +60,19 @@ function StepCard({ step, reviewing, onJump, onPeek, onHover, onError }: { step:
   );
 }
 
+function QuestionCard({ q, onJump, onError }: { q: Question; onJump: (t: number) => void; onError: (m: string) => void }) {
+  const [v, setV] = useState('');
+  const send = (answer: string) => post(`/questions/${q.id}/answer`, { answer }).catch(e => onError(e.message));
+  return (
+    <form className="question" onSubmit={e => { e.preventDefault(); if (v.trim()) send(v); }}>
+      <div className="q-top"><span className="dot review" aria-hidden="true" /><b>The agent is asking</b>{q.at != null && <button type="button" className="tool" onClick={() => onJump(q.at!)}>jump there</button>}</div>
+      <p dir="auto">{q.text}</p>
+      {q.options?.length ? <div className="row">{q.options.map(o => <button type="button" key={o} onClick={() => send(o)} dir="auto">{o}</button>)}</div> : null}
+      <div className="row"><input id={`answer-${q.id}`} value={v} onChange={e => setV(e.target.value)} placeholder="Type an answer" dir="auto" aria-label="Answer" /><button type="submit" className="accept" disabled={!v.trim()}>Answer</button></div>
+    </form>
+  );
+}
+
 export const Steps = memo(function Steps({ state, onJump, onPeek, onHover, onError }: Props) {
   const list = useRef<HTMLOListElement>(null);
   const [msg, setMsg] = useState('');
@@ -85,6 +98,7 @@ export const Steps = memo(function Steps({ state, onJump, onPeek, onHover, onErr
         <button className={`pause${control.paused ? ' on' : ''}`} onClick={() => post('/control', { paused: !control.paused })}>{control.paused ? 'Resume' : 'Pause'}</button>
       </header>
 
+      {state.questions.map(q => <QuestionCard key={q.id} q={q} onJump={onJump} onError={onError} />)}
       {steps.length === 0 ? (
         <div className="onboard">
           <p><b>1.</b> Drop a video into the editor.</p>

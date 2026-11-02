@@ -153,7 +153,7 @@ try {
 
   /* 7. agent: sees the notes, is refused inside the lock, resolves the note */
   const proj = await call('get_project');
-  check('agent is told about the user\'s edits and notes', /edited the video by hand/.test(proj.text) && /userNotes/.test(proj.text) && /DO NOT TOUCH/.test(proj.text));
+  check('agent is told about the user\'s edits and notes', /edited the video by hand/.test(proj.text) && /userNotes/.test(proj.text) && /DO-NOT-TOUCH/.test(proj.text));
   const bad = await call('add_zoom', { start: lock.start + 0.2, end: lock.end - 0.2 });
   check('agent edit inside a locked range is refused', bad.error && /locked/.test(bad.text));
   const cutBad = await call('cut_range', { start: lock.start - 0.5, end: lock.start + 0.5 });

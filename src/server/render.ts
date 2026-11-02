@@ -138,7 +138,10 @@ function gainExpr(run: Run, fps: number): string | null {
 
 export type Quality = 'final' | 'draft';
 
-export function buildCommand(p: Project, out: string, assFile: string, quality: Quality = 'final'): string[] {
+export type Output = { kind: 'mp4'; quality: Quality } | { kind: 'png'; width: number } | { kind: 'wav' };
+
+export function buildCommand(p: Project, out: string, assFile: string, quality: Quality | Output = 'final'): string[] {
+  const o: Output = typeof quality === 'string' ? { kind: 'mp4', quality } : quality;
   const W = p.width, H = p.height, fps = p.fps, D = Math.max(0.1, duration(p));
   const SR = 48000, spf = Math.round(SR / fps); // audio samples per video frame
   const media = new Map(p.media.map(m => [m.id, m]));
@@ -151,6 +154,7 @@ export function buildCommand(p: Project, out: string, assFile: string, quality: 
   // One run from the very start: use it directly (padded with black to the end) instead of compositing onto black.
   const fullCover = vRuns.length === 1 && vRuns[0].segs[0].sF === 0 && media.get(vRuns[0].mediaId)?.kind === 'video';
   const padTo = fullCover ? Math.round(D * fps) - vRuns[0].segs.reduce((a, s) => a + s.lF, 0) : 0;
+  const wantV = o.kind !== 'wav', wantA = o.kind !== 'png';
   const pick = (segs: Seg[], first: number) => segs.map(s => `between(n,${s.iF - first},${s.iF - first + s.lF - 1})`).join('+');
 
   for (const track of ['video', 'audio'] as const) {
@@ -164,7 +168,7 @@ export function buildCommand(p: Project, out: string, assFile: string, quality: 
       else args.push('-ss', n(srcFrom), '-t', n(srcTo - srcFrom + 1 / fps), '-i', mediaPath(m));
       const i = idx++;
       const single = run.segs.length === 1;
-      if (track === 'video' && m.kind !== 'audio') {
+      if (wantV && track === 'video' && m.kind !== 'audio') {
         const sel = single ? `trim=end_frame=${frames},` : `select='${pick(run.segs, first.iF)}',`;
         f.push(`[${i}:v]fps=${fps},${sel}setpts=N/${fps}/TB+${n(startT)}/TB,scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1,format=yuv420p[v${i}]`);
         if (fullCover) {
@@ -175,7 +179,7 @@ export function buildCommand(p: Project, out: string, assFile: string, quality: 
           base = `ov${ov}`;
         }
       }
-      if (m.hasAudio && run.segs.some(s => s.clip.volume > 0)) {
+      if (wantA && m.hasAudio && run.segs.some(s => s.clip.volume > 0)) {
         const sel = single ? `atrim=end_sample=${frames * spf},` : `asetnsamples=n=${spf}:p=1,aselect='${pick(run.segs, first.iF)}',`;
         const gain = gainExpr(run, fps);
         f.push(`[${i}:a]aresample=${SR},asetpts=N/SR/TB,${sel}asetpts=N/SR/TB${gain ? `,volume='${gain}':eval=frame` : ''},adelay=${Math.round(startT * 1000)}:all=1[a${i}]`);
@@ -184,42 +188,57 @@ export function buildCommand(p: Project, out: string, assFile: string, quality: 
     }
   }
 
-  if (!fullCover) f.unshift(`color=c=black:s=${W}x${H}:r=${fps}:d=${n(D)}[base0]`);
+  if (wantV && !fullCover) f.unshift(`color=c=black:s=${W}x${H}:r=${fps}:d=${n(D)}[base0]`);
   let v = base;
-  const groups = zoomGroups(p.effects.filter((e): e is ZoomEffect => e.kind === 'zoom'), fps, D);
-  if (groups.length) {
-    // Split the timeline into plain and zoomed parts; only zoomed parts pay for zoompan.
-    const parts: { s: number; e: number; fx?: ZoomEffect[] }[] = [];
-    let t = 0;
-    for (const g of groups) { if (g.s > t) parts.push({ s: t, e: g.s }); parts.push(g); t = g.e; }
-    if (t < D) parts.push({ s: t, e: D });
-    f.push(`[${v}]split=${parts.length}${parts.map((_, k) => `[zs${k}]`).join('')}`);
-    parts.forEach((pt, k) => {
-      const trim = `trim=start=${n(pt.s)}:end=${n(pt.e)},setpts=PTS-STARTPTS`;
-      f.push(`[zs${k}]${trim}${pt.fx ? ',' + zoomFilter(pt.fx, W, H, fps, pt.s) : ''},setsar=1,format=yuv420p[zp${k}]`);
-    });
-    f.push(`${parts.map((_, k) => `[zp${k}]`).join('')}concat=n=${parts.length}:v=1:a=0[vz]`);
-    v = 'vz';
+  if (wantV) {
+    const groups = zoomGroups(p.effects.filter((e): e is ZoomEffect => e.kind === 'zoom'), fps, D);
+    if (groups.length) {
+      // Split the timeline into plain and zoomed parts; only zoomed parts pay for zoompan.
+      const parts: { s: number; e: number; fx?: ZoomEffect[] }[] = [];
+      let t = 0;
+      for (const g of groups) { if (g.s > t) parts.push({ s: t, e: g.s }); parts.push(g); t = g.e; }
+      if (t < D) parts.push({ s: t, e: D });
+      f.push(`[${v}]split=${parts.length}${parts.map((_, k) => `[zs${k}]`).join('')}`);
+      parts.forEach((pt, k) => {
+        const trim = `trim=start=${n(pt.s)}:end=${n(pt.e)},setpts=PTS-STARTPTS`;
+        f.push(`[zs${k}]${trim}${pt.fx ? ',' + zoomFilter(pt.fx, W, H, fps, pt.s) : ''},setsar=1,format=yuv420p[zp${k}]`);
+      });
+      f.push(`${parts.map((_, k) => `[zp${k}]`).join('')}concat=n=${parts.length}:v=1:a=0[vz]`);
+      v = 'vz';
+    }
+    if (p.texts.length) {
+      const esc = (s: string) => s.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
+      f.push(`[${v}]ass='${esc(assFile)}':fontsdir='${esc(FONTS_DIR)}':shaping=complex[vt]`);
+      v = 'vt';
+    }
+    f.push(`[${v}]${o.kind === 'png' ? `scale=${o.width}:-2,format=rgb24` : 'format=yuv420p'}[vout]`);
   }
-  if (p.texts.length) {
-    const esc = (s: string) => s.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
-    f.push(`[${v}]ass='${esc(assFile)}':fontsdir='${esc(FONTS_DIR)}':shaping=complex[vt]`);
-    v = 'vt';
-  }
-  f.push(`[${v}]format=yuv420p[vout]`);
 
-  if (audio.length) f.push(`${audio.join('')}amix=inputs=${audio.length}:normalize=0:dropout_transition=0,apad=whole_dur=${n(D)},atrim=end=${n(D)}[aout]`);
+  if (!wantA) { /* image only */ }
+  else if (audio.length) f.push(`${audio.join('')}amix=inputs=${audio.length}:normalize=0:dropout_transition=0,apad=whole_dur=${n(D)},atrim=end=${n(D)}[aout]`);
   else f.push(`anullsrc=r=${SR}:cl=stereo,atrim=end=${n(D)}[aout]`);
 
   const script = out + '.filter';
   fs.writeFileSync(script, f.join(';\n'));
-  args.push('-filter_complex_script', script, '-map', '[vout]', '-map', '[aout]',
-    '-c:v', 'libx264', '-preset', quality === 'draft' ? 'ultrafast' : 'veryfast', '-crf', quality === 'draft' ? '25' : '20', '-r', String(fps),
+  args.push('-filter_complex_script', script);
+  if (o.kind === 'png') args.push('-map', '[vout]', '-frames:v', '1', '-update', '1', out);
+  else if (o.kind === 'wav') args.push('-map', '[aout]', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', '-t', n(D), out);
+  else args.push('-map', '[vout]', '-map', '[aout]',
+    '-c:v', 'libx264', '-preset', o.quality === 'draft' ? 'ultrafast' : 'veryfast', '-crf', o.quality === 'draft' ? '25' : '20', '-r', String(fps),
     '-c:a', 'aac', '-b:a', '160k', '-t', n(D), '-movflags', '+faststart', out);
   return args;
 }
 
 let current: ReturnType<typeof spawn> | null = null;
+let job: Promise<string> | null = null;
+
+/** Starts an export, or returns the one already running. */
+export function startRender(quality: Quality = 'final'): Promise<string> {
+  if (job) return job;
+  job = renderProject(quality).finally(() => { job = null; });
+  return job;
+}
+export const renderJob = () => job;
 
 export async function renderProject(quality: Quality = 'final'): Promise<string> {
   if (current) throw new Error('An export is already running.');
@@ -237,11 +256,14 @@ export async function renderProject(quality: Quality = 'final'): Promise<string>
     const proc = spawn(FFMPEG, buildCommand(p, out, assFile, quality));
     current = proc;
     let err = '';
+    let lastP = 0;
     proc.stdout!.on('data', (b: Buffer) => {
       const m = /out_time_us=(\d+)/.exec(b.toString());
-      if (m) store.setRender({ progress: Math.min(0.99, Number(m[1]) / 1e6 / D) });
+      if (!m) return;
+      const prog = Math.min(0.99, Number(m[1]) / 1e6 / D);
+      if (prog - lastP >= 0.005) { lastP = prog; store.setRender({ progress: prog }); }
     });
-    proc.stderr!.on('data', (b: Buffer) => { err += b.toString(); });
+    proc.stderr!.on('data', (b: Buffer) => { err += b.toString(); if (err.length > 20000) err = err.slice(-10000); });
     proc.on('close', code => {
       current = null;
       fs.rmSync(assFile, { force: true });
@@ -250,4 +272,95 @@ export async function renderProject(quality: Quality = 'final'): Promise<string>
       else { const e = err.trim().split('\n').slice(-6).join('\n') || `ffmpeg exited with ${code}`; store.setRender({ status: 'error', error: e }); reject(new Error(e)); }
     });
   });
+}
+
+/* ---------- small renders for the agent to look at and listen to ---------- */
+
+/** The part of the project between s and e, shifted to start at 0. */
+export function sliceProject(p: Project, s: number, e: number): Project {
+  const clips: Clip[] = [];
+  for (const c of p.clips) {
+    const ce = clipEnd(c);
+    if (ce <= s || c.start >= e) continue;
+    const cut = Math.max(0, s - c.start);
+    clips.push({ ...c, start: Math.max(0, c.start - s), in: c.in + cut, out: Math.min(c.out, c.in + (e - c.start)), fadeIn: undefined, fadeOut: undefined, volume: c.volume });
+  }
+  const shift = <T extends { start: number; end: number }>(xs: T[]) => xs.filter(x => x.end > s && x.start < e).map(x => ({ ...x, start: x.start - s, end: x.end - s }));
+  const texts = shift(p.texts).map(t => t.words ? { ...t, words: t.words.map(w => ({ ...w, start: w.start - s, end: w.end - s })) } : t);
+  return { ...p, clips, texts, effects: shift(p.effects), markers: [] };
+}
+
+function runFfmpeg(args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(FFMPEG, args);
+    let err = '';
+    proc.stderr.on('data', (b: Buffer) => { err += b.toString(); });
+    proc.on('close', code => (code === 0 ? resolve() : reject(new Error(err.trim().split('\n').slice(-4).join('\n') || `ffmpeg exited with ${code}`))));
+  });
+}
+
+const tmpBase = () => path.join(EXPORT_DIR, `.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`);
+
+/** One frame exactly as the export would draw it: video, zoom, captions and titles. */
+export async function renderStill(p: Project, t: number, width = 540): Promise<Buffer> {
+  const slice = sliceProject(p, t, t + 1 / p.fps);
+  if (!slice.clips.some(c => c.track === 'video')) throw new Error(`No video at ${t}s.`);
+  const base = tmpBase(), ass = base + '.ass', png = base + '.png';
+  fs.writeFileSync(ass, buildAss(slice));
+  try {
+    await runFfmpeg(buildCommand(slice, png, ass, { kind: 'png', width }));
+    return fs.readFileSync(png);
+  } finally { for (const f of [ass, png, png + '.filter']) fs.rmSync(f, { force: true }); }
+}
+
+/** A grid of rendered frames across a range, each labelled with its time. */
+export async function renderContactSheet(p: Project, start: number, end: number, count: number): Promise<{ png: Buffer; times: number[] }> {
+  const cols = count <= 4 ? count : count <= 9 ? 3 : 4;
+  const rows = Math.ceil(count / cols);
+  const tileW = Math.round(Math.min(360, 1440 / cols) / 2) * 2;
+  const times = Array.from({ length: count }, (_, k) => Math.round((start + ((end - start) * (k + 0.5)) / count) * 100) / 100);
+  const base = tmpBase();
+  const files: string[] = [];
+  try {
+    for (let k = 0; k < times.length; k += 2) {
+      await Promise.all(times.slice(k, k + 2).map(async (t, j) => {
+        const f = `${base}-${k + j}.png`;
+        try { fs.writeFileSync(f, await renderStill(p, t, tileW)); }
+        catch { await runFfmpeg(['-v', 'error', '-y', '-f', 'lavfi', '-i', `color=c=black:s=${tileW}x${Math.round((tileW * p.height) / p.width / 2) * 2}`, '-frames:v', '1', f]); }
+        files[k + j] = f;
+      }));
+    }
+    const font = path.join(FONTS_DIR, 'Cairo.ttf').replace(/:/g, '\\:');
+    const label = (k: number) => `[${k}:v]drawtext=fontfile='${font}':text='${fmtLabel(times[k])}':x=8:y=8:fontsize=${Math.round(tileW / 12)}:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=6[l${k}]`;
+    const layout = times.map((_, k) => `${(k % cols) ? Array.from({ length: k % cols }, () => 'w0').join('+') : '0'}_${Math.floor(k / cols) ? Array.from({ length: Math.floor(k / cols) }, () => 'h0').join('+') : '0'}`).join('|');
+    const graph = times.map((_, k) => label(k)).join(';') + ';' + times.map((_, k) => `[l${k}]`).join('') + (count > 1 ? `xstack=inputs=${count}:layout=${layout}:fill=black` : 'null');
+    const out = base + '-sheet.png';
+    await runFfmpeg(['-v', 'error', '-y', ...files.flatMap(f => ['-i', f]), '-filter_complex', graph, '-frames:v', '1', out]);
+    const png = fs.readFileSync(out);
+    fs.rmSync(out, { force: true });
+    void rows;
+    return { png, times };
+  } finally { for (const f of files) if (f) fs.rmSync(f, { force: true }); }
+}
+const fmtLabel = (t: number) => { const m = Math.floor(t / 60), s = t - m * 60; return `${String(m).padStart(2, '0')}\\:${s.toFixed(1).padStart(4, '0')}`; };
+
+/** Loudness of the mixed output per window, in dBFS (0 is the loudest possible). */
+export async function audioLevels(p: Project, start: number, end: number, step: number): Promise<{ t: number; rms: number; peak: number }[]> {
+  const slice = sliceProject(p, start, end);
+  const base = tmpBase(), ass = base + '.ass', wav = base + '.wav';
+  fs.writeFileSync(ass, buildAss({ ...slice, texts: [] }));
+  try {
+    await runFfmpeg(buildCommand({ ...slice, texts: [], effects: [] }, wav, ass, { kind: 'wav' }));
+    const buf = fs.readFileSync(wav);
+    const data = buf.subarray(44);
+    const per = Math.max(1, Math.round(16000 * step));
+    const out: { t: number; rms: number; peak: number }[] = [];
+    const db = (x: number) => (x <= 0 ? -99 : Math.max(-99, Math.round(20 * Math.log10(x) * 10) / 10));
+    for (let i = 0; i < data.length / 2; i += per) {
+      let sum = 0, pk = 0, k = 0;
+      for (let j = i; j < Math.min(i + per, data.length / 2); j++, k++) { const v = data.readInt16LE(j * 2) / 32768; sum += v * v; if (Math.abs(v) > pk) pk = Math.abs(v); }
+      out.push({ t: Math.round((start + i / 16000) * 100) / 100, rms: db(Math.sqrt(sum / Math.max(1, k))), peak: db(pk) });
+    }
+    return out;
+  } finally { for (const f of [ass, wav, wav + '.filter']) fs.rmSync(f, { force: true }); }
 }

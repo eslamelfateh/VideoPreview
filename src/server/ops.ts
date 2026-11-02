@@ -128,30 +128,53 @@ export function setVolume(d: Project, a: { volume: number; clipId?: string; star
 
 /* ---------- transcript-based ---------- */
 
-export function removeSilences(d: Project, a: { minPause?: number; padding?: number }): StepResult {
+export function removeSilences(d: Project, a: { minPause?: number; padding?: number; start?: number; end?: number }): StepResult {
   const minPause = opt(a.minPause, 'minPause') ?? 0.6, padding = opt(a.padding, 'padding') ?? 0.12;
+  const rs = opt(a.start, 'start') ?? -Infinity, re = opt(a.end, 'end') ?? Infinity;
   const video = d.clips.filter(c => c.track === 'video').sort((x, y) => x.start - y.start);
   if (!video.some(c => d.transcripts.some(t => t.mediaId === c.mediaId))) throw new Error('No video clip has a transcript yet.');
   const before = duration(d);
   const next: Clip[] = [];
+  const pieces: { oldS: number; oldE: number; newS: number }[] = [];
   let cursor = video[0]?.start ?? 0;
   for (const c of video) {
     const tr = d.transcripts.find(t => t.mediaId === c.mediaId);
     const regions: [number, number][] = [];
     if (!tr) regions.push([c.in, c.out]);
-    for (const w of tr?.words.filter(w => w.end > c.in && w.start < c.out) ?? []) {
+    // Outside the requested range everything is kept, as if it were speech.
+    const keep: Word[] = [];
+    if (tr && rs > c.start) keep.push({ text: '', start: c.in - padding, end: Math.min(c.out, c.in + (rs - c.start)) - padding });
+    if (tr && re < clipEnd(c)) keep.push({ text: '', start: Math.max(c.in, c.in + (re - c.start)) + padding, end: c.out + padding });
+    const speech = (tr?.words.filter(w => w.end > c.in && w.start < c.out) ?? []).concat(keep.filter(k => k.end > k.start)).sort((x, y) => x.start - y.start);
+    for (const w of speech) {
       const s = Math.max(c.in, w.start - padding), e = Math.min(c.out, w.end + padding);
       const last = regions[regions.length - 1];
       if (last && s - last[1] < minPause) last[1] = Math.max(last[1], e); else regions.push([s, e]);
     }
     regions.forEach(([s, e], i) => {
       next.push({ ...c, id: i === 0 ? c.id : newId('clip'), start: t3(cursor), in: t3(s), out: t3(e), fadeIn: undefined, fadeOut: undefined });
+      pieces.push({ oldS: c.start + (s - c.in), oldE: c.start + (e - c.in), newS: cursor });
       cursor += e - s;
     });
   }
   d.clips = d.clips.filter(c => c.track !== 'video').concat(next);
-  const stale = d.texts.length || d.effects.length ? 'Existing captions/zooms were not moved; re-create them for the new timing.' : undefined;
-  return { summary: `Removed pauses: ${video.length} clip(s) → ${next.length}, ${t3(before - duration(d))}s shorter`, at: 0, detail: stale };
+  // Captions, zooms and notes move with the speech they belong to.
+  const map = (t: number) => {
+    for (const p of pieces) if (t >= p.oldS && t <= p.oldE) return p.newS + (t - p.oldS);
+    const after = pieces.find(p => p.oldS > t);
+    if (after) return after.newS;
+    const last = pieces[pieces.length - 1];
+    return last ? last.newS + (last.oldE - last.oldS) + (t - last.oldE) : t;
+  };
+  const move = <T extends { start: number; end: number }>(x: T): T => ({ ...x, start: t3(map(x.start)), end: t3(map(x.end)) });
+  d.texts = d.texts.map(t => ({ ...move(t), ...(t.words ? { words: t.words.map(move) } : {}) })).filter(t => t.end - t.start > 0.05);
+  d.effects = d.effects.map(move).filter(e => e.end - e.start > 0.05);
+  d.markers = d.markers.map(m => {
+    if (m.kind !== 'dont') return move(m);
+    const s = map(m.start);
+    return { ...m, start: t3(s), end: t3(s + (m.end - m.start)) };
+  });
+  return { summary: `Removed pauses: ${video.length} clip(s) → ${next.length}, ${t3(before - duration(d))}s shorter`, at: 0 };
 }
 
 function buildCaptions(words: Word[], perCaption: number, color?: string): TextItem[] {

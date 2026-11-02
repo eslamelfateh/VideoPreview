@@ -2,18 +2,22 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import multer from 'multer';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { getOAuthProtectedResourceMetadataUrl, mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { trackEnd } from '../shared/timeline.js';
 import { analyze } from './assets.js';
-import { createMcpServer } from './mcp.js';
+import { createMcpServer, type McpSession } from './mcp.js';
+import { LiveCutOAuth } from './oauth.js';
 import { USER_OPS } from './ops.js';
 import { importFile } from './media.js';
-import { FONTS_DIR, renderProject } from './render.js';
+import { FONTS_DIR, startRender } from './render.js';
 import { EXPORT_DIR, MEDIA_DIR, newId, store } from './store.js';
 
 const PORT = Number(process.env.PORT ?? 4317);
@@ -43,9 +47,34 @@ const authorized = (req: http.IncomingMessage) => !TOKEN || same(tokenOf(req), T
 
 const app = express();
 app.disable('x-powered-by');
+app.set('trust proxy', 1);
+
+/* ---------- OAuth (for apps like claude.ai custom connectors), when a token and public URL are set ---------- */
+
+const PUBLIC = process.env.PUBLIC_URL?.replace(/\/$/, '');
+const oauthOk = !!TOKEN && !!PUBLIC && (PUBLIC.startsWith('https://') || /^http:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(PUBLIC));
+const oauth = oauthOk ? new LiveCutOAuth(TOKEN) : null;
+const mcpUrl = new URL('/mcp', PUBLIC ?? `http://localhost:${PORT}`);
+if (oauth) {
+  app.use(mcpAuthRouter({ provider: oauth, issuerUrl: new URL(PUBLIC!), resourceServerUrl: mcpUrl, resourceName: 'LiveCut' }));
+  app.post('/oauth/approve', express.urlencoded({ extended: false }), (req, res) => oauth.approve(req.body ?? {}, res));
+} else if (TOKEN && PUBLIC) console.warn('OAuth is off: PUBLIC_URL must be https:// (or localhost) for apps like claude.ai to connect.');
+const OPEN_PATHS = /^\/(\.well-known\/|authorize$|token$|register$|revoke$|oauth\/)/;
+
+/** MCP accepts the static token or an OAuth access token; a 401 points clients at the OAuth metadata. */
+async function mcpAuth(req: Request, res: Response, next: NextFunction) {
+  if (!TOKEN) return next();
+  const t = (req.headers.authorization ?? '').startsWith('Bearer ') ? req.headers.authorization!.slice(7) : '';
+  if (t && same(t, TOKEN)) return next();
+  if (t && oauth) { try { await oauth.verifyAccessToken(t); return next(); } catch { /* fall through */ } }
+  if (oauth) res.set('WWW-Authenticate', `Bearer error="invalid_token", resource_metadata="${getOAuthProtectedResourceMetadataUrl(mcpUrl)}"`);
+  res.status(401).json({ jsonrpc: '2.0', error: { code: -32001, message: 'Unauthorized' }, id: null });
+}
+
 app.use((req: Request, res: Response, next: NextFunction) => {
+  if (OPEN_PATHS.test(req.path) || req.path === '/mcp') return next();
   const q = typeof req.query.token === 'string' ? req.query.token : '';
-  if (TOKEN && q && same(q, TOKEN) && req.method === 'GET' && !req.path.startsWith('/api') && req.path !== '/mcp') {
+  if (TOKEN && q && same(q, TOKEN) && req.method === 'GET' && !req.path.startsWith('/api')) {
     res.cookie('livecut_token', q, { httpOnly: true, sameSite: 'lax', secure: req.secure, maxAge: 30 * 24 * 3600_000 });
     return res.redirect(req.path);
   }
@@ -56,23 +85,64 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-/* ---------- MCP (stateless streamable HTTP: one server per request) ---------- */
+/* ---------- MCP: streamable HTTP with sessions, so the server can notify subscribers ---------- */
 
-app.post('/mcp', express.json({ limit: '20mb' }), async (req, res) => {
+interface Session { transport: StreamableHTTPServerTransport; server: McpServer; info: McpSession; last: number }
+const sessions = new Map<string, Session>();
+const sessionOf = (req: Request) => { const id = req.headers['mcp-session-id']; return typeof id === 'string' ? sessions.get(id) : undefined; };
+const rpcError = (res: Response, status: number, message: string) => res.status(status).json({ jsonrpc: '2.0', error: { code: -32000, message }, id: null });
+
+app.post('/mcp', express.json({ limit: '20mb' }), mcpAuth, async (req, res) => {
   store.lastAgentSeen = Date.now();
-  const server = createMcpServer();
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-  res.on('close', () => { transport.close(); server.close(); });
   try {
+    const existing = sessionOf(req);
+    if (existing) { existing.last = Date.now(); await existing.transport.handleRequest(req, res, req.body); return; }
+    if (req.headers['mcp-session-id']) return rpcError(res, 404, 'Session not found. Start a new session.');
+    if (!isInitializeRequest(req.body)) return rpcError(res, 400, 'Send initialize first.');
+    const info: McpSession = { subscriptions: new Set() };
+    const server = createMcpServer(info);
+    const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      onsessioninitialized: id => { sessions.set(id, { transport, server, info, last: Date.now() }); },
+    });
+    transport.onclose = () => { if (transport.sessionId) sessions.delete(transport.sessionId); };
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
   } catch (e) {
     console.error(e);
-    if (!res.headersSent) res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal error' }, id: null });
+    if (!res.headersSent) rpcError(res, 500, 'Internal error');
   }
 });
-app.get('/mcp', (_req, res) => res.status(405).set('Allow', 'POST').end());
-app.delete('/mcp', (_req, res) => res.status(405).set('Allow', 'POST').end());
+const sessionRequest = async (req: Request, res: Response) => {
+  const s = sessionOf(req);
+  if (!s) return rpcError(res, 404, 'Session not found.');
+  s.last = Date.now();
+  await s.transport.handleRequest(req, res);
+};
+app.get('/mcp', mcpAuth, sessionRequest);
+app.delete('/mcp', mcpAuth, sessionRequest);
+
+// Close sessions idle for two hours.
+setInterval(() => { for (const s of sessions.values()) if (Date.now() - s.last > 2 * 3600_000) s.transport.close(); }, 10 * 60_000).unref();
+
+// Tell subscribed agents when the project, the user's notes, or the history change.
+let seen = { project: store.project, notes: JSON.stringify(store.project.markers), steps: 0 };
+let notifyTimer: NodeJS.Timeout | null = null;
+store.subscribe(() => {
+  if (notifyTimer) return;
+  notifyTimer = setTimeout(() => {
+    notifyTimer = null;
+    const changed: string[] = [];
+    if (store.project !== seen.project) changed.push('livecut://project');
+    const notes = JSON.stringify(store.project.markers);
+    if (notes !== seen.notes) changed.push('livecut://notes');
+    const steps = store.steps.length * 1e6 + store.steps.filter(x => x.undone).length;
+    if (steps !== seen.steps) changed.push('livecut://history');
+    if (store.project.transcripts !== seen.project.transcripts) changed.push('livecut://transcript');
+    seen = { project: store.project, notes, steps };
+    for (const s of sessions.values()) for (const uri of changed) if (s.info.subscriptions.has(uri)) s.server.server.sendResourceUpdated({ uri }).catch(() => {});
+  }, 250);
+});
 
 /* ---------- editor API ---------- */
 
@@ -107,7 +177,12 @@ api.post('/edit', handle(async req => {
   if (!fn) throw new Error(`Unknown edit: ${op}`);
   return { summary: await store.edit(String(op), args ?? {}, d => fn(d, args ?? {}), 'user') };
 }));
-api.post('/export', handle(req => { renderProject(req.body?.quality === 'draft' ? 'draft' : 'final').catch(() => { /* state carries the error */ }); return { started: true }; }));
+api.post('/export', handle(req => { startRender(req.body?.quality === 'draft' ? 'draft' : 'final').catch(() => { /* state carries the error */ }); return { started: true }; }));
+api.post('/questions/:id/answer', handle(req => {
+  const a = String(req.body?.answer ?? '').trim();
+  if (!a) throw new Error('Write an answer first.');
+  store.answer(String(req.params.id), a.slice(0, 2000));
+}));
 api.post('/reset', handle(() => store.reset()));
 
 const upload = multer({ dest: os.tmpdir(), limits: { fileSize: 4 * 1024 ** 3 } });
@@ -176,5 +251,5 @@ for (const m of store.project.media) if (!store.assets[m.id]) analyze(m);
 
 server.listen(PORT, HOST, () => {
   const base = process.env.PUBLIC_URL ?? `http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`;
-  console.log(`\nLiveCut is running\n  editor:  ${base}${TOKEN ? '/?token=…' : ''}\n  MCP:     ${base}/mcp\n\nConnect Claude Code:\n  claude mcp add --transport http livecut ${base}/mcp${TOKEN ? ' --header "Authorization: Bearer $LIVECUT_TOKEN"' : ''}\n`);
+  console.log(`\nLiveCut is running\n  editor:  ${base}${TOKEN ? '/?token=…' : ''}\n  MCP:     ${base}/mcp${oauth ? ' (OAuth on: add it as a custom connector in claude.ai)' : ''}\n\nConnect Claude Code:\n  claude mcp add --transport http livecut ${base}/mcp${TOKEN ? ' --header "Authorization: Bearer $LIVECUT_TOKEN"' : ''}\n`);
 });
