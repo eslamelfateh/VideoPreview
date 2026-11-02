@@ -84,6 +84,17 @@ const play = await measure();
 await page.click('button.play');
 const st = await page.evaluate(() => ({ stalls: window.__stalls, cuts: window.__cuts }));
 console.log(`playback: ${play.fps.toFixed(0)} fps, p95 frame ${play.p95.toFixed(1)}ms, worst ${play.worst.toFixed(0)}ms; ${st.cuts} cuts played, ${st.stalls} video stalls`);
+// Also from the middle, where the proxy piece may not exist yet right after an upload.
+{
+  const lanesBox = await page.locator('.tl-lanes').boundingBox();
+  await page.mouse.click(lanesBox.x + lanesBox.width * 0.45, lanesBox.y + 60 + 44 * 4 + 20);
+  await page.waitForTimeout(800);
+  const px = await api('/state').then(s2 => s2.assets[media.id]?.proxy);
+  await page.click('button.play');
+  const mid = await measure();
+  await page.click('button.play');
+  console.log(`playback mid-video: ${mid.fps.toFixed(0)} fps, p95 ${mid.p95.toFixed(1)}ms (proxy pieces ready: ${px?.ready ?? 0}/${px?.total ?? '?'})`);
+}
 
 // Zoom the timeline in and scrub.
 for (let k = 0; k < 4; k++) await page.click('button[aria-label="Zoom in timeline"]');
