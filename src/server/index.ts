@@ -18,7 +18,7 @@ import { LiveCutOAuth } from './oauth.js';
 import { USER_OPS } from './ops.js';
 import { importFile } from './media.js';
 import { FONTS_DIR, measureLoudness, startRender } from './render.js';
-import { setLoudness } from './ops.js';
+import { loadVersion, setLoudness } from './ops.js';
 import { EXPORT_DIR, MEDIA_DIR, newId, store } from './store.js';
 
 const PORT = Number(process.env.PORT ?? 4317);
@@ -184,6 +184,12 @@ api.post('/audio/normalize', handle(async req => {
   const target = Number(req.body?.target ?? -14);
   return { summary: await store.edit('normalize_loudness', { target }, d => setLoudness(d, { target, measured }), 'user') };
 }));
+api.post('/versions', handle(req => store.saveVersion(String(req.body?.name ?? ''))));
+api.post('/versions/:id/load', handle(async req => {
+  const v = store.findVersion(String(req.params.id));
+  return { summary: await store.edit('load_version', { version: v.name }, d => loadVersion(d, v), 'user') };
+}));
+api.post('/versions/:id/delete', handle(req => store.deleteVersion(String(req.params.id))));
 api.post('/questions/:id/answer', handle(req => {
   const a = String(req.body?.answer ?? '').trim();
   if (!a) throw new Error('Write an answer first.');

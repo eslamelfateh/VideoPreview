@@ -160,6 +160,7 @@ export interface RenderState {
   progress: number;
   file?: string;
   error?: string;
+  encoder?: string; // which H.264 encoder made (or is making) the file
 }
 
 /** Derived from media files after import: thumbnails strip and audio peaks for the timeline. */
@@ -179,8 +180,12 @@ export interface Question {
   time: number;
 }
 
+/** A saved copy of the whole project, to compare and switch between. */
+export interface VersionInfo { id: string; name: string; time: number; duration: number; clips: number; texts: number; effects: number }
+
 export interface ServerState {
   project: Project;
+  versions: VersionInfo[];
   questions: Question[];
   /** Speech regions on the timeline (from the transcript), for previewing ducking. */
   speech: [number, number][];

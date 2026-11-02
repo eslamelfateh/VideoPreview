@@ -422,6 +422,17 @@ export function addTransition(d: Project, a: { at: number; duration?: number }):
   return { summary: `${kind} at ${fmtTime(at)} (${t3(dur)}s)`, at: Math.max(0, at - dur) };
 }
 
+/* ---------- versions ---------- */
+
+/** Replaces the timeline with a saved version (as a normal step, so it can be undone). Media files are kept. */
+export function loadVersion(d: Project, v: { name: string; project: Project }): StepResult {
+  const src = structuredClone(v.project);
+  const media = new Map(d.media.map(m => [m.id, m]));
+  for (const m of src.media) media.set(m.id, m);
+  Object.assign(d, { ...src, media: [...media.values()] });
+  return { summary: `Switched to version "${v.name}"`, at: 0 };
+}
+
 /* ---------- reframing ---------- */
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));

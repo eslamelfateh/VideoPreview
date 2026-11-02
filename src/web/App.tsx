@@ -1,13 +1,42 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { applyChanges } from '../shared/diff';
 import { clipAt, clipEnd, duration, fmtTime } from '../shared/timeline';
-import type { Step } from '../shared/types';
+import type { Step, VersionInfo } from '../shared/types';
 import { post, upload, useServerState } from './api';
 import { clock, usePlaying, useTime } from './clock';
 import { Inspector } from './Inspector';
 import { Preview, unlockAudio } from './Preview';
 import { Steps } from './Steps';
 import { Timeline, type Range, type Selection } from './Timeline';
+
+function Versions({ versions, onError }: { versions: VersionInfo[]; onError: (m: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState('');
+  const [confirm, setConfirm] = useState<string | null>(null);
+  const act = (p: Promise<unknown>) => p.catch(e => onError(e.message));
+  return (
+    <div className="versions">
+      <button aria-expanded={open} onClick={() => setOpen(o => !o)}>Versions{versions.length ? ` (${versions.length})` : ''}</button>
+      {open && (
+        <div className="menu" role="dialog" aria-label="Versions">
+          <form className="row" onSubmit={e => { e.preventDefault(); act(post('/versions', { name }).then(() => setName(''))); }}>
+            <input id="version-name" value={name} onChange={e => setName(e.target.value)} placeholder="Name this version" dir="auto" aria-label="Version name" />
+            <button type="submit" className="primary">Save</button>
+          </form>
+          {versions.length === 0 && <p className="meta-line">Save the current edit to compare it with another one later, or ask the agent for two versions.</p>}
+          <ul>{[...versions].reverse().map(v => (
+            <li key={v.id}>
+              <div><b dir="auto">{v.name}</b><span className="meta-line">{fmtTime(v.duration)} · {v.clips} clips · {v.texts} texts · {new Date(v.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div>
+              {confirm === v.id
+                ? <><button className="danger" onClick={() => { act(post(`/versions/${v.id}/delete`)); setConfirm(null); }}>Delete</button><button onClick={() => setConfirm(null)}>Keep</button></>
+                : <><button onClick={() => act(post(`/versions/${v.id}/load`))} title="Replaces the timeline; you can undo it">Open</button><button className="quiet" aria-label={`Delete ${v.name}`} onClick={() => setConfirm(v.id)}>×</button></>}
+            </li>
+          ))}</ul>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function TimeDisplay({ total }: { total: number }) {
   const t = useTime();
@@ -137,14 +166,15 @@ export function App() {
         {!online && <span className="offline">reconnecting…</span>}
         <div className="spacer" />
         <input ref={fileInput} id="file-input" type="file" multiple accept="video/*,audio/*,image/*" hidden onChange={e => { doUpload(e.target.files); e.target.value = ''; }} />
+        <Versions versions={state.versions} onError={setError} />
         <button onClick={() => fileInput.current?.click()} disabled={uploading}>{uploading ? 'Uploading…' : 'Add media'}</button>
         {render.status === 'rendering'
-          ? <span className="progress"><span style={{ width: `${Math.round(render.progress * 100)}%` }} />Exporting {Math.round(render.progress * 100)}%</span>
+          ? <span className="progress" title={render.encoder}><span style={{ width: `${Math.round(render.progress * 100)}%` }} />Exporting {Math.round(render.progress * 100)}%</span>
           : <>
             <button onClick={() => post('/export', { quality: 'draft' }).catch(e => setError(e.message))} disabled={!project.clips.length} title="Faster, lower quality, for checking">Quick draft</button>
             <button className="primary" onClick={() => post('/export', { quality: 'final' }).catch(e => setError(e.message))} disabled={!project.clips.length}>Export MP4</button>
           </>}
-        {render.status === 'done' && render.file && <a className="download" href={`/exports/${render.file}`}>Download</a>}
+        {render.status === 'done' && render.file && <a className="download" href={`/exports/${render.file}`} title={render.encoder ? `Encoded with ${render.encoder}` : undefined}>Download</a>}
         {confirmReset
           ? <span className="confirm">Delete all media and steps? <button onClick={() => { post('/reset'); setConfirmReset(false); clock.seek(0); setSelection(null); setRange(null); }}>Delete</button><button onClick={() => setConfirmReset(false)}>Cancel</button></span>
           : <button className="ghost" onClick={() => setConfirmReset(true)}>New project</button>}

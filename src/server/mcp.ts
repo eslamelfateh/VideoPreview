@@ -453,6 +453,27 @@ export function createMcpServer(session?: McpSession): McpServer {
 
   editTool('remove_effect', 'Remove zoom', 'Removes an effect.', { effectId: z.string() }, { destructiveHint: true }, ops.removeEffect);
 
+  /* ---------- versions ---------- */
+
+  reg('save_version', 'Save a version', 'Saves the whole timeline under a name (e.g. "A - fast cuts"), to compare later or switch back to. Saving with an existing name replaces it. Use with load_version to offer the user two versions.', {
+    name: z.string(),
+  }, { destructiveHint: false, idempotentHint: true }, ({ name }) => {
+    const v = store.saveVersion(name);
+    return { ...text(`Saved version "${v.name}" (${fmtTime(v.duration)}, ${v.clips} clips, ${v.texts} texts, ${v.effects} effects).`), structuredContent: { id: v.id, name: v.name } };
+  });
+
+  reg('list_versions', 'List versions', 'Saved versions of the timeline.', {}, READ, () => {
+    const vs = store.versionList();
+    return { ...text(vs.length ? vs.map(v => `${v.id} "${v.name}" ${fmtTime(v.duration)} · ${v.clips} clips · ${v.texts} texts · ${v.effects} effects`).join('\n') : 'No saved versions.'), structuredContent: { versions: vs } };
+  });
+
+  reg('load_version', 'Switch to a version', 'Replaces the timeline with a saved version (by id or name). It is a normal step, so the user can undo it. Save the current state first if you need it.', {
+    version: z.string(), ...DRY,
+  }, { destructiveHint: true }, async ({ version, dry_run }) => {
+    const v = store.findVersion(version);
+    return result(await store.editDetailed('load_version', { version: v.name }, d => ops.loadVersion(d, v), 'agent', { dryRun: !!dry_run }));
+  }, EDIT_OUTPUT);
+
   /* ---------- notes ---------- */
 
   editTool('resolve_note', 'Resolve a note', 'Marks one of the user\'s "please-do" notes as done, with a short reply saying what you did.', {
@@ -493,12 +514,12 @@ export function createMcpServer(session?: McpSession): McpServer {
     }
     const r = store.render;
     const link = r.file ? `${PUBLIC_URL()}/exports/${r.file}` : undefined;
-    const msg = r.status === 'done' ? `Exported ${r.file}. Download: ${link}`
+    const msg = r.status === 'done' ? `Exported ${r.file} with ${r.encoder ?? 'x264'}. Download: ${link}`
       : r.status === 'rendering' ? `Export still running (${Math.round(r.progress * 100)}%). Call get_export_status to keep waiting.`
       : r.status === 'error' ? `Export failed: ${r.error}` : 'No export has been started.';
-    return { ...text(msg + store.drainNotes()), structuredContent: { status: r.status, progress: Math.round(r.progress * 100) / 100, file: r.file, url: r.status === 'done' ? link : undefined, error: r.error } };
+    return { ...text(msg + store.drainNotes()), structuredContent: { status: r.status, progress: Math.round(r.progress * 100) / 100, file: r.file, url: r.status === 'done' ? link : undefined, error: r.error, encoder: r.encoder } };
   };
-  const EXPORT_OUTPUT = { status: z.enum(['idle', 'rendering', 'done', 'error']), progress: z.number(), file: z.string().optional(), url: z.string().optional(), error: z.string().optional() };
+  const EXPORT_OUTPUT = { status: z.enum(['idle', 'rendering', 'done', 'error']), progress: z.number(), file: z.string().optional(), url: z.string().optional(), error: z.string().optional(), encoder: z.string().optional() };
 
   reg('export_video', 'Export video', 'Starts rendering the timeline to an MP4 and waits up to wait_seconds (default 45) with progress updates. If it is not done by then it keeps running: call get_export_status. quality "draft" is 2-3x faster for checking.', {
     quality: z.enum(['final', 'draft']).optional(), wait_seconds: z.number().min(0).max(110).optional(),

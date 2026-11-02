@@ -38,6 +38,15 @@ input, textarea { font: inherit; color: var(--fg); background: #161616; border: 
 .primary { background: var(--fg); color: var(--bg); border-color: var(--fg); font-weight: 600; }
 .ghost { background: none; color: var(--muted); }
 .download { color: var(--cap); font-weight: 600; }
+.versions { position: relative; }
+.versions .menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; width: min(360px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 10px; box-shadow: 0 12px 30px #0008; }
+.versions .menu .row { display: flex; gap: 6px; }
+.versions .menu input { flex: 1; min-width: 0; padding: 5px 9px; }
+.versions ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 300px; overflow-y: auto; }
+.versions li { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 9px; padding: 6px 8px; }
+.versions li > div { flex: 1; min-width: 0; display: grid; }
+.versions li b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.versions li button { padding: 3px 9px; font-size: 12.5px; }
 .confirm { display: flex; align-items: center; gap: 6px; color: var(--warn); font-size: 13px; }
 .progress { position: relative; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; padding: 5px 12px; font: 12px var(--mono); min-width: 150px; }
 .progress span { position: absolute; inset: 0 auto 0 0; background: #f0cf6a33; transition: width .3s; }

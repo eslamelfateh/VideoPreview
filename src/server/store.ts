@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { applyChanges, clone, conflicts, diff } from '../shared/diff.js';
-import { clipEnd, DUCK_GAP, fmtTime, speechRegions, srcAt } from '../shared/timeline.js';
-import type { Change, Control, MediaAssets, Project, Question, RenderState, ServerState, Step } from '../shared/types.js';
+import { clipEnd, DUCK_GAP, duration, fmtTime, speechRegions, srcAt } from '../shared/timeline.js';
+import type { Change, Control, MediaAssets, Project, Question, RenderState, ServerState, Step, VersionInfo } from '../shared/types.js';
 
 export const DATA_DIR = path.resolve(process.env.LIVECUT_DATA ?? 'data');
 export const MEDIA_DIR = path.join(DATA_DIR, 'media');
@@ -53,6 +53,7 @@ class Store {
   notes: string[] = [];
   assets: Record<string, MediaAssets> = {};
   questions: (Question & { resolve: (answer: string | null) => void })[] = [];
+  versions: { id: string; name: string; time: number; project: Project }[] = [];
   lastAgentSeen = 0;
 
   private listeners = new Set<Listener>();
@@ -67,6 +68,7 @@ class Store {
       this.steps = (s.steps ?? []).map((x: Step) => (x.status === 'review' || x.status === 'running' ? { ...x, status: 'done' } : x));
       this.control = { mode: s.control?.mode ?? 'live', paused: false };
       this.assets = s.assets ?? {};
+      this.versions = s.versions ?? [];
     } catch { /* first run */ }
   }
 
@@ -77,6 +79,7 @@ class Store {
       project: { ...this.project, transcripts: this.project.transcripts.map(t => ({ mediaId: t.mediaId, language: t.language, words: [] })) },
       assets: this.assets,
       questions: this.questions.map(({ resolve: _r, ...q }) => q),
+      versions: this.versionList(),
       speech: this.speechCache(),
       steps: this.steps.map(st => (st.changes.some(c => c.coll === 'transcripts') ? { ...st, changes: st.changes.map(slim) } : st)),
       control: this.control, render: this.render,
@@ -101,7 +104,7 @@ class Store {
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => {
       const tmp = STATE_FILE + '.tmp';
-      fs.writeFileSync(tmp, JSON.stringify({ project: this.project, steps: this.steps, control: this.control, assets: this.assets }));
+      fs.writeFileSync(tmp, JSON.stringify({ project: this.project, steps: this.steps, control: this.control, assets: this.assets, versions: this.versions }));
       fs.renameSync(tmp, STATE_FILE);
     }, 300);
   }
@@ -212,6 +215,28 @@ class Store {
     return { text: text + this.drainNotes(), summary: res.summary, step: step.n, status, ...lists };
   }
 
+  versionList(): VersionInfo[] {
+    return this.versions.map(v => ({ id: v.id, name: v.name, time: v.time, duration: duration(v.project), clips: v.project.clips.length, texts: v.project.texts.length, effects: v.project.effects.length }));
+  }
+
+  /** Saves the current project under a name (replacing a version with the same name). */
+  saveVersion(name: string): VersionInfo {
+    const n = name.trim().slice(0, 60) || `Version ${this.versions.length + 1}`;
+    const existing = this.versions.find(v => v.name === n);
+    const v = { id: existing?.id ?? newId('ver'), name: n, time: Date.now(), project: clone(this.project) };
+    this.versions = this.versions.filter(x => x.id !== v.id).concat(v);
+    this.changed();
+    return this.versionList().find(x => x.id === v.id)!;
+  }
+
+  findVersion(idOrName: string) {
+    const v = this.versions.find(x => x.id === idOrName || x.name === idOrName);
+    if (!v) throw new Error(`No version "${idOrName}". Saved: ${this.versions.map(x => x.name).join(', ') || 'none'}.`);
+    return v;
+  }
+
+  deleteVersion(id: string) { this.findVersion(id); this.versions = this.versions.filter(v => v.id !== id); this.changed(); }
+
   /** Asks the user in the editor; resolves with their answer, or null if they do not answer in time. */
   ask(text: string, options?: string[], at?: number, ms = WAIT_MS): Promise<string | null> {
     return new Promise(resolve => {
@@ -264,7 +289,7 @@ class Store {
 
   reset() {
     if (this.review) this.review.resolve({ approve: false, note: 'The user reset the project.' });
-    this.project = emptyProject(); this.steps = []; this.notes = []; this.assets = {};
+    this.project = emptyProject(); this.steps = []; this.notes = []; this.assets = {}; this.versions = [];
     for (const q of [...this.questions]) q.resolve(null); this.render = { status: 'idle', progress: 0 };
     for (const f of fs.readdirSync(MEDIA_DIR)) fs.rmSync(path.join(MEDIA_DIR, f), { force: true });
     this.changed();

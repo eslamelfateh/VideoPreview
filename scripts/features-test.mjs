@@ -213,6 +213,30 @@ try {
     check('remove one reframe key', undoKey.structuredContent.status === 'applied' && (await api('/state')).project.reframe.length === 1);
   }
 
+  /* versions: make two, switch, undo the switch */
+  {
+    await api('/reset', {});
+    await upload(video);
+    const mid = (await api('/state')).project.media[0].id;
+    await call('transcribe', { mediaId: mid, language: 'ar' });
+    await call('add_captions', {});
+    const a = await call('save_version', { name: 'A - karaoke' });
+    await call('set_caption_style', { preset: 'bold', position: 'top' });
+    await call('add_zoom', { start: 1, end: 2 });
+    await call('save_version', { name: 'B - bold + zoom' });
+    const list = await call('list_versions');
+    check('two versions saved', list.structuredContent.versions.length === 2, list.text.split('\n').map(l => l.split('"')[1]).join(' / '));
+    const ld = await call('load_version', { version: 'A - karaoke' });
+    const sA = (await api('/state')).project;
+    check('load_version switches the timeline', ld.structuredContent.status === 'applied' && sA.effects.length === 0 && !sA.texts.some(t => t.preset === 'bold'));
+    await api('/undo-last', {});
+    const sB = (await api('/state')).project;
+    check('undo goes back to the other version', sB.effects.length === 1 && sB.texts.every(t => t.preset === 'bold'));
+    const ui = await api(`/versions/${a.structuredContent.id}/load`, {});
+    check('the editor can open a version too', /Switched to version "A - karaoke"/.test(ui.summary ?? ''));
+    check('the editor sees the version list', (await api('/state')).versions.length === 2);
+  }
+
   /* project settings are undoable */
   await call('set_canvas', { width: 1920, height: 1080 });
   const before = (await api('/state')).project.width;

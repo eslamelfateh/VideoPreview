@@ -6,6 +6,7 @@ import { CAPTION_PRESETS, clipEnd, clipLen, dipAt, DUCK_GAP, layoutOf, speedOf, 
 import type { Clip, Media, Project, TextItem, ZoomEffect } from '../shared/types.js';
 import { FFMPEG, mediaPath } from './media.js';
 import { EXPORT_DIR, store } from './store.js';
+import { pickEncoder, X264, type Encoder } from './encoders.js';
 
 export const FONTS_DIR = path.resolve(fileURLToPath(import.meta.url), '../../../assets/fonts');
 const n = (x: number) => (Math.round(x * 1000) / 1000).toString();
@@ -181,7 +182,7 @@ function cropFilter(p: Project, W: number, H: number): string {
 
 export type Quality = 'final' | 'draft';
 
-export type Output = { kind: 'mp4'; quality: Quality } | { kind: 'png'; width: number } | { kind: 'wav'; rate?: number; channels?: number };
+export type Output = { kind: 'mp4'; quality: Quality; video?: string[] } | { kind: 'png'; width: number } | { kind: 'wav'; rate?: number; channels?: number };
 
 export function buildCommand(p: Project, out: string, assFile: string, quality: Quality | Output = 'final'): string[] {
   const o: Output = typeof quality === 'string' ? { kind: 'mp4', quality } : quality;
@@ -301,7 +302,7 @@ export function buildCommand(p: Project, out: string, assFile: string, quality: 
   if (o.kind === 'png') args.push('-map', '[vout]', '-frames:v', '1', '-update', '1', out);
   else if (o.kind === 'wav') args.push('-map', '[aout]', '-ac', String(o.channels ?? 1), '-ar', String(o.rate ?? 16000), '-c:a', 'pcm_s16le', '-t', n(D), out);
   else args.push('-map', '[vout]', '-map', '[aout]',
-    '-c:v', 'libx264', '-preset', o.quality === 'draft' ? 'ultrafast' : 'veryfast', '-crf', o.quality === 'draft' ? '25' : '20', '-r', String(fps),
+    ...(o.video ?? ['-c:v', 'libx264', '-preset', o.quality === 'draft' ? 'ultrafast' : 'veryfast', '-crf', o.quality === 'draft' ? '25' : '20']), '-r', String(fps),
     '-c:a', 'aac', '-b:a', '160k', '-t', n(D), '-movflags', '+faststart', out);
   return args;
 }
@@ -329,8 +330,10 @@ export async function renderProject(quality: Quality = 'final'): Promise<string>
   fs.writeFileSync(assFile, buildAss(p));
   store.setRender({ status: 'rendering', progress: 0, file: undefined, error: undefined });
 
-  return new Promise((resolve, reject) => {
-    const proc = spawn(FFMPEG, buildCommand(p, out, assFile, quality));
+  const enc = await pickEncoder();
+  store.setRender({ encoder: enc.label });
+  const attempt = (e: Encoder) => new Promise<void>((resolve, reject) => {
+    const proc = spawn(FFMPEG, buildCommand(p, out, assFile, { kind: 'mp4', quality, video: e.args(quality) }));
     current = proc;
     let err = '';
     let lastP = 0;
@@ -343,12 +346,28 @@ export async function renderProject(quality: Quality = 'final'): Promise<string>
     proc.stderr!.on('data', (b: Buffer) => { err += b.toString(); if (err.length > 20000) err = err.slice(-10000); });
     proc.on('close', code => {
       current = null;
-      fs.rmSync(assFile, { force: true });
-      fs.rmSync(out + '.filter', { force: true });
-      if (code === 0) { store.setRender({ status: 'done', progress: 1, file }); resolve(file); }
-      else { const e = err.trim().split('\n').slice(-6).join('\n') || `ffmpeg exited with ${code}`; store.setRender({ status: 'error', error: e }); reject(new Error(e)); }
+      if (code === 0) resolve();
+      else reject(new Error(err.trim().split('\n').slice(-6).join('\n') || `ffmpeg exited with ${code}`));
     });
   });
+  try {
+    try { await attempt(enc); }
+    catch (e) {
+      if (enc.id === X264.id) throw e;
+      // A hardware encoder can fail on some inputs or drivers: redo the export on the CPU.
+      console.warn(`${enc.label} failed, exporting with x264 instead:`, (e as Error).message.split('\n')[0]);
+      store.setRender({ progress: 0, encoder: `${X264.label} (after ${enc.label} failed)` });
+      await attempt(X264);
+    }
+    store.setRender({ status: 'done', progress: 1, file });
+    return file;
+  } catch (e) {
+    store.setRender({ status: 'error', error: (e as Error).message });
+    throw e;
+  } finally {
+    fs.rmSync(assFile, { force: true });
+    fs.rmSync(out + '.filter', { force: true });
+  }
 }
 
 /* ---------- small renders for the agent to look at and listen to ---------- */
