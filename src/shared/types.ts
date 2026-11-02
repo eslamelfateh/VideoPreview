@@ -24,6 +24,8 @@ export interface Clip {
   in: number; // source in-point, seconds
   out: number; // source out-point, seconds
   volume: number; // 0..2
+  fadeIn?: number; // seconds
+  fadeOut?: number; // seconds
 }
 
 export interface Word {
@@ -64,6 +66,21 @@ export interface Transcript {
   words: Word[]; // source seconds
 }
 
+/**
+ * A point-by-point instruction the user pins on the timeline for the agent.
+ * "do" asks for something at that spot; "dont" locks the range: agent edits
+ * that would change anything overlapping it are refused by the server.
+ */
+export interface Marker {
+  id: string;
+  start: number;
+  end: number;
+  text: string;
+  kind: 'do' | 'dont';
+  status: 'open' | 'done';
+  reply?: string; // what the agent did about it
+}
+
 export interface Project {
   name: string;
   width: number;
@@ -74,9 +91,10 @@ export interface Project {
   texts: TextItem[];
   effects: Effect[];
   transcripts: Transcript[];
+  markers: Marker[];
 }
 
-export const COLLECTIONS = ['media', 'clips', 'texts', 'effects', 'transcripts'] as const;
+export const COLLECTIONS = ['media', 'clips', 'texts', 'effects', 'transcripts', 'markers'] as const;
 export type Collection = (typeof COLLECTIONS)[number];
 
 /** One entity that a step added, removed or changed. */
@@ -119,8 +137,15 @@ export interface RenderState {
   error?: string;
 }
 
+/** Derived from media files after import: thumbnails strip and audio peaks for the timeline. */
+export interface MediaAssets {
+  thumbs?: { file: string; count: number; interval: number; width: number; height: number };
+  peaks?: { file: string; perSecond: number };
+}
+
 export interface ServerState {
   project: Project;
+  assets: Record<string, MediaAssets>;
   steps: Step[];
   control: Control;
   render: RenderState;

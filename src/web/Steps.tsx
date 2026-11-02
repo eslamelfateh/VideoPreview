@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import type { ServerState, Step } from '../shared/types';
 import { post } from './api';
 
@@ -60,7 +60,7 @@ function StepCard({ step, reviewing, onJump, onPeek, onHover, onError }: { step:
   );
 }
 
-export function Steps({ state, onJump, onPeek, onHover, onError }: Props) {
+export const Steps = memo(function Steps({ state, onJump, onPeek, onHover, onError }: Props) {
   const list = useRef<HTMLOListElement>(null);
   const [msg, setMsg] = useState('');
   const { control, steps, agentConnected, notes } = state;
@@ -109,4 +109,4 @@ export function Steps({ state, onJump, onPeek, onHover, onError }: Props) {
       </div>
     </aside>
   );
-}
+});

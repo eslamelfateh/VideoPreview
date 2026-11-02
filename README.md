@@ -26,7 +26,10 @@ Built Arabic-first: Egyptian/MSA transcripts, right-to-left word-by-word karaoke
 | **Step mode** | The agent waits after every edit until you **Accept** or **Reject** it. Your note ("slower", "make it yellow") goes back to the agent with the decision. |
 | **Pause** | Stops the agent at its next edit so you can take a look. It waits until you press Resume. |
 | **Message mid-edit** | Type a note at any time; it is delivered with the agent's next tool result. |
-| **Export** | ffmpeg renders exactly what the preview shows: cuts, karaoke captions, titles, eased zooms, and mixed audio. |
+| **Edit by hand** | Drag clips, captions and zooms to move them, drag edges to trim, split with `S`. The inspector edits every detail: volume up to 200% with fades, text and colors, zoom amount/smoothness, and you click the video to aim a zoom. The agent is told about your edits. |
+| **Point-by-point notes** | Drag on the ruler to select a range, then leave a note ("add a title here") or lock it ("don't touch this part"). The agent sees the notes, resolves them, and the server refuses agent edits inside locked ranges. |
+| **Volume** | Per clip or over any range (`set_volume`), with a volume line and waveform drawn on the timeline. |
+| **Export** | ffmpeg renders exactly what the preview shows: cuts, karaoke captions, titles, eased zooms, and mixed audio. **Quick draft** exports 2-3x faster for checking. |
 
 ## Quick start (local)
 
@@ -69,7 +72,7 @@ A self-hosted faster-whisper server with an OpenAI-compatible API works too. Age
 
 | Read | Edit (each one is a reviewable step) |
 |---|---|
-| `get_project` · `get_transcript` · `find_words` · `get_frame` (the agent sees a frame as an image) · `wait_for_user` | `import_media` · `set_canvas` · `add_clip` · `update_clip` · `split_clip` · `remove_clip` · `transcribe` · `set_transcript` · `remove_silences` · `add_captions` · `add_text` · `update_text` · `remove_text` · `add_zoom` · `update_effect` · `remove_effect` · `export_video` |
+| `get_project` (includes the user's notes) · `get_transcript` · `find_words` · `get_frame` (the agent sees a frame as an image) · `wait_for_user` | `import_media` · `set_canvas` · `add_clip` · `update_clip` · `set_volume` · `split_clip` · `remove_clip` · `cut_range` · `transcribe` · `set_transcript` · `remove_silences` · `add_captions` · `add_text` · `update_text` · `remove_text` · `add_zoom` · `update_effect` · `remove_effect` · `resolve_note` · `export_video` |
 
 The project is one JSON document (`src/shared/types.ts`): media, clips, texts, effects, transcripts. Every edit runs on a draft, gets diffed per entity, and is stored as a step with its before/after. That is what makes undo, before/after, and reject cheap.
 
@@ -114,17 +117,23 @@ src/web/      React editor: preview, timeline, steps panel
 scripts/      smoke-test.ts drives a running server through MCP the way an agent would
 ```
 
-Check a change end to end: `npm start`, upload a video, then `npm run smoke`.
+Check a change end to end with a running server (`npm start`):
+
+- `npm run smoke` drives the server over MCP like an agent.
+- `node scripts/e2e.mjs <video-with-speech> [music]` drives the browser like a person (upload, sliders, dragging, notes, locks, keyboard) while an MCP client plays the agent. Needs Playwright.
+- `node scripts/perf.mjs <long-video>` is a load test: hundreds of clips and captions; it reports frame rate, stalls, edit latency and export time.
+
+Measured on a 4-core container with a 10-minute video cut into 420 clips with 420 captions and 20 zooms: playback 59 fps with no stalls at cuts, edits reach the preview in ~160 ms, the editor opens in under a second, and export runs at about 0.6x real time (final) on 4 cores.
 
 ## Status and roadmap
 
 This is an early version (0.1). Working: the full agent → live timeline → review → export loop, tested with an MCP client and a browser. Planned:
 
-- Drag to trim and move clips by hand (today the user reviews; the agent edits)
 - Caption style presets and fonts, per-word emphasis
 - Transitions, speed ramps, B-roll and music ducking
 - Multiple projects and accounts on one server
-- Faster preview for long timelines (WebCodecs)
+- Async export with progress for agents, batched edits, structured tool output
+- Rendered frames and contact sheets for the agent to review its own work
 
 Contributions are welcome. Open an issue first for big changes.
 

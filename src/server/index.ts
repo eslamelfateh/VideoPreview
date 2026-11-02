@@ -9,7 +9,9 @@ import multer from 'multer';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { trackEnd } from '../shared/timeline.js';
+import { analyze } from './assets.js';
 import { createMcpServer } from './mcp.js';
+import { USER_OPS } from './ops.js';
 import { importFile } from './media.js';
 import { FONTS_DIR, renderProject } from './render.js';
 import { EXPORT_DIR, MEDIA_DIR, newId, store } from './store.js';
@@ -86,6 +88,12 @@ api.post('/control', handle(req => {
   const { mode, paused } = req.body ?? {};
   store.setControl({ ...(mode === 'live' || mode === 'step' ? { mode } : {}), ...(typeof paused === 'boolean' ? { paused } : {}) });
 }));
+api.post('/undo-last', handle(() => {
+  const last = [...store.steps].reverse().find(s => !s.undone && s.status === 'done' && s.changes.length);
+  if (!last) throw new Error('Nothing to undo.');
+  store.toggleUndo(last.id);
+  return { undone: last.n };
+}));
 api.post('/steps/:id/undo', handle(req => store.toggleUndo(String(req.params.id))));
 api.post('/steps/:id/decision', handle(req => store.decide(String(req.params.id), { approve: !!req.body?.approve, note: String(req.body?.note ?? '').trim() || undefined })));
 api.post('/notes', handle(req => {
@@ -93,7 +101,13 @@ api.post('/notes', handle(req => {
   if (!t) throw new Error('Write a message first.');
   store.addNote(t);
 }));
-api.post('/export', handle(() => { renderProject().catch(() => { /* state carries the error */ }); return { started: true }; }));
+api.post('/edit', handle(async req => {
+  const { op, args } = req.body ?? {};
+  const fn = USER_OPS[String(op)];
+  if (!fn) throw new Error(`Unknown edit: ${op}`);
+  return { summary: await store.edit(String(op), args ?? {}, d => fn(d, args ?? {}), 'user') };
+}));
+api.post('/export', handle(req => { renderProject(req.body?.quality === 'draft' ? 'draft' : 'final').catch(() => { /* state carries the error */ }); return { started: true }; }));
 api.post('/reset', handle(() => store.reset()));
 
 const upload = multer({ dest: os.tmpdir(), limits: { fileSize: 4 * 1024 ** 3 } });
@@ -115,6 +129,7 @@ api.post('/media', upload.array('files', 20), handle(async req => {
       d.clips.push({ id: newId('clip'), track, mediaId: m.id, start, in: 0, out: m.duration, volume: 1 });
       return { summary: `Uploaded ${m.name} and placed it on the ${track} track`, at: start };
     }, 'user');
+    analyze(m);
   }
 }));
 app.use('/api', api);
@@ -145,9 +160,19 @@ server.on('upgrade', (req, socket, head) => {
     ws.on('close', () => sockets.delete(ws));
   });
 });
-const broadcast = (s = store.snapshot()) => { const msg = JSON.stringify(s); for (const ws of sockets) if (ws.readyState === ws.OPEN) ws.send(msg); };
+// Coalesce bursts of changes (sliders, export progress) into at most ~25 messages a second.
+let pending: NodeJS.Timeout | null = null;
+const broadcast = () => {
+  if (pending || !sockets.size) return;
+  pending = setTimeout(() => {
+    pending = null;
+    const msg = JSON.stringify(store.snapshot());
+    for (const ws of sockets) if (ws.readyState === ws.OPEN && ws.bufferedAmount < 8 * 1024 * 1024) ws.send(msg);
+  }, 40);
+};
 store.subscribe(broadcast);
-setInterval(() => broadcast(), 15_000); // refreshes "agent connected"
+setInterval(broadcast, 15_000); // refreshes "agent connected"
+for (const m of store.project.media) if (!store.assets[m.id]) analyze(m);
 
 server.listen(PORT, HOST, () => {
   const base = process.env.PUBLIC_URL ?? `http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`;
