@@ -1,13 +1,86 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { applyChanges } from '../shared/diff';
 import { clipAt, clipEnd, duration, fmtTime } from '../shared/timeline';
-import type { Step, VersionInfo } from '../shared/types';
-import { post, upload, useServerState } from './api';
+import type { Marker, ProjectInfo, Step, VersionInfo } from '../shared/types';
+import { post, REVIEW, reviewNote, upload, useServerState } from './api';
 import { clock, usePlaying, useTime } from './clock';
 import { Inspector } from './Inspector';
 import { Preview, unlockAudio } from './Preview';
 import { Steps } from './Steps';
 import { Timeline, type Range, type Selection } from './Timeline';
+
+function Projects({ projects, current, name, reviewToken, onError }: { projects: ProjectInfo[]; current: string; name: string; reviewToken?: string; onError: (m: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [rename, setRename] = useState(name);
+  const [copied, setCopied] = useState(false);
+  const [confirm, setConfirm] = useState<string | null>(null);
+  useEffect(() => setRename(name), [name]);
+  const act = (p: Promise<unknown>) => p.catch(e => onError(e.message));
+  const link = reviewToken ? `${location.origin}/review/${reviewToken}` : '';
+  return (
+    <div className="versions">
+      <button aria-expanded={open} onClick={() => setOpen(o => !o)} className="project-name" title="Projects">{name}</button>
+      {open && (
+        <div className="menu" role="dialog" aria-label="Projects">
+          <form className="row" onSubmit={e => { e.preventDefault(); act(post('/projects/rename', { name: rename })); }}>
+            <input id="project-rename" value={rename} onChange={e => setRename(e.target.value)} aria-label="Project name" dir="auto" />
+            <button type="submit" disabled={rename === name}>Rename</button>
+          </form>
+          <div className="review-link">
+            <b>Review link</b>
+            <span className="meta-line">Anyone with it can watch this project and pin notes for the agent, but not edit.</span>
+            {link
+              ? <div className="row"><input id="review-url" readOnly value={link} aria-label="Review link" onFocus={e => e.currentTarget.select()} />
+                  <button onClick={() => navigator.clipboard.writeText(link).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => (document.getElementById('review-url') as HTMLInputElement)?.select())}>{copied ? 'Copied' : 'Copy'}</button>
+                  <button className="quiet danger" onClick={() => act(post('/review-link/revoke'))}>Turn off</button></div>
+              : <button onClick={() => act(post('/review-link'))}>Create review link</button>}
+          </div>
+          <form className="row" onSubmit={e => { e.preventDefault(); act(post('/projects', { name: newName }).then(() => setNewName(''))); }}>
+            <input id="project-new" value={newName} onChange={e => setNewName(e.target.value)} placeholder="New project name" dir="auto" aria-label="New project name" />
+            <button type="submit" className="primary">New</button>
+          </form>
+          <ul>{projects.map(p => (
+            <li key={p.id} className={p.id === current ? 'current' : ''}>
+              <div><b dir="auto">{p.name}</b><span className="meta-line">{p.id === current ? 'open now' : new Date(p.updated).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</span></div>
+              {p.id !== current && (confirm === p.id
+                ? <><button className="danger" onClick={() => { act(post(`/projects/${p.id}/delete`)); setConfirm(null); }}>Delete</button><button onClick={() => setConfirm(null)}>Keep</button></>
+                : <><button onClick={() => act(post(`/projects/${p.id}/open`))}>Open</button><button className="quiet" aria-label={`Delete ${p.name}`} onClick={() => setConfirm(p.id)}>×</button></>)}
+            </li>
+          ))}</ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** What a reviewer sees beside the video: how to leave notes, and the notes so far. */
+function ReviewPanel({ markers, range, onRange, onError }: { markers: Marker[]; range: Range; onRange: (r: Range) => void; onError: (m: string) => void }) {
+  const [text, setText] = useState('');
+  const [sent, setSent] = useState('');
+  const send = (kind: 'do' | 'dont') => {
+    const r = range ?? { start: clock.get(), end: clock.get() + 2 };
+    reviewNote({ start: Math.round(r.start * 100) / 100, end: Math.round(r.end * 100) / 100, text, kind })
+      .then(() => { setText(''); setSent('Sent. The editor will see it on the timeline.'); onRange(null); setTimeout(() => setSent(''), 4000); })
+      .catch(e => onError(e.message));
+  };
+  return (
+    <div className="inspector">
+      <h3><span className="chip range">review</span><span className="name">Leave a note</span></h3>
+      <p className="meta-line">Play the video, then drag on the ruler above the timeline to pick a moment (or use the playhead). Your note is pinned there for the editor and the AI agent.</p>
+      <label className="field col" htmlFor="review-text"><span>{range ? `${fmtTime(range.start)} → ${fmtTime(range.end)}` : `At ${fmtTime(clock.get())}`}</span>
+        <textarea id="review-text" rows={3} dir="auto" value={text} onChange={e => setText(e.target.value)} placeholder="e.g. الكابشن هنا صغير · cut this part" /></label>
+      <div className="row">
+        <button className="primary" disabled={!text.trim()} onClick={() => send('do')}>Send note</button>
+        <button disabled={!text.trim()} onClick={() => send('dont')}>🔒 Keep this part as is</button>
+      </div>
+      {sent && <p className="reply">{sent}</p>}
+      {markers.length > 0 && <ul className="keylist">{markers.map(m => (
+        <li key={m.id}><button className="quiet" onClick={() => { clock.pause(); clock.seek(m.start); }}>{fmtTime(m.start)}</button><span dir="auto">{m.kind === 'dont' ? '🔒 ' : m.status === 'done' ? '✓ ' : ''}{m.text}</span></li>
+      ))}</ul>}
+    </div>
+  );
+}
 
 function Versions({ versions, onError }: { versions: VersionInfo[]; onError: (m: string) => void }) {
   const [open, setOpen] = useState(false);
@@ -109,11 +182,12 @@ export function App() {
       const k = e.key.toLowerCase();
       const fail = () => {};
       if (e.code === 'Space' && !el.closest('button')) { e.preventDefault(); unlockAudio(); clock.toggle(); }
-      else if ((e.metaKey || e.ctrlKey) && k === 'z') {
+      else if ((e.metaKey || e.ctrlKey) && k === 'z' && !REVIEW) {
         e.preventDefault();
         post('/undo-last').catch(er => setError(er.message));
       }
       else if (e.metaKey || e.ctrlKey || e.altKey) return;
+      else if (REVIEW && !['arrowleft', 'arrowright', 'escape'].includes(k)) return;
       else if (k === 'arrowleft' || k === 'arrowright') { e.preventDefault(); clock.pause(); clock.seek(t + (k === 'arrowright' ? 1 : -1) * (e.shiftKey ? 1 : 1 / fps)); }
       else if (k === 's') {
         const c = sel?.kind === 'clip' ? p.clips.find(x => x.id === sel.id) : clipAt(p, 'video', t) ?? clipAt(p, 'audio', t);
@@ -156,16 +230,19 @@ export function App() {
   const openNotes = project.markers.filter(m => m.kind === 'do' && m.status === 'open').length;
 
   return (
-    <div className="app"
+    <div className={`app${REVIEW ? ' reviewing' : ''}`}
       onDragOver={e => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true); } }}
       onDragLeave={e => { if (e.currentTarget === e.target) setDragging(false); }}
-      onDrop={e => { e.preventDefault(); setDragging(false); doUpload(e.dataTransfer.files); }}>
+      onDrop={e => { e.preventDefault(); setDragging(false); if (!REVIEW) doUpload(e.dataTransfer.files); }}>
       <header className="topbar">
         <div className="brand"><span className="mark" aria-hidden="true" />LiveCut</div>
+        {REVIEW ? <span className="review-badge">Review · {project.name}</span>
+          : <Projects projects={state.projects} current={state.projectId} name={project.name} reviewToken={state.reviewToken} onError={setError} />}
         <span className="meta">{project.width}×{project.height} · {project.fps}fps · {fmtTime(total)}</span>
         {!online && <span className="offline">reconnecting…</span>}
         <div className="spacer" />
         <input ref={fileInput} id="file-input" type="file" multiple accept="video/*,audio/*,image/*" hidden onChange={e => { doUpload(e.target.files); e.target.value = ''; }} />
+        {!REVIEW && <>
         <Versions versions={state.versions} onError={setError} />
         <button onClick={() => fileInput.current?.click()} disabled={uploading}>{uploading ? 'Uploading…' : 'Add media'}</button>
         {render.status === 'rendering'
@@ -176,8 +253,9 @@ export function App() {
           </>}
         {render.status === 'done' && render.file && <a className="download" href={`/exports/${render.file}`} title={render.encoder ? `Encoded with ${render.encoder}` : undefined}>Download</a>}
         {confirmReset
-          ? <span className="confirm">Delete all media and steps? <button onClick={() => { post('/reset'); setConfirmReset(false); clock.seek(0); setSelection(null); setRange(null); }}>Delete</button><button onClick={() => setConfirmReset(false)}>Cancel</button></span>
-          : <button className="ghost" onClick={() => setConfirmReset(true)}>New project</button>}
+          ? <span className="confirm">Empty this project (clips, steps, versions)? <button onClick={() => { post('/reset'); setConfirmReset(false); clock.seek(0); setSelection(null); setRange(null); }}>Delete</button><button onClick={() => setConfirmReset(false)}>Cancel</button></span>
+          : <button className="ghost" onClick={() => setConfirmReset(true)}>Clear</button>}
+        </>}
       </header>
 
       <main className="workspace">
@@ -186,19 +264,20 @@ export function App() {
             <div className="stage"><div className="fit">
               <Preview project={project} assets={state.assets} speech={state.speech} peeking={!!peekStep} anchorFor={zoomSel} onAnchor={onAnchor} />
             </div></div>
-            <Inspector project={project} selection={selection} range={range} onEdit={edit} onSelect={onSelect} onRange={onRange} />
+            {REVIEW ? <ReviewPanel markers={project.markers} range={range} onRange={onRange} onError={setError} />
+              : <Inspector project={project} selection={selection} range={range} onEdit={edit} onSelect={onSelect} onRange={onRange} />}
           </div>
           <div className="transport">
             <PlayButton />
             <TimeDisplay total={total} />
-            <label className="follow"><input id="follow" type="checkbox" checked={follow} onChange={e => setFollow(e.target.checked)} /> follow agent</label>
+            {!REVIEW && <label className="follow"><input id="follow" type="checkbox" checked={follow} onChange={e => setFollow(e.target.checked)} /> follow agent</label>}
             {openNotes > 0 && <span className="open-notes">{openNotes} note{openNotes > 1 ? 's' : ''} waiting for the agent</span>}
             <span className={`live ${state.control.paused ? 'paused' : state.agentConnected ? 'busy' : ''}`}><b />{state.control.paused ? 'paused · you have control' : peekStep ? `before step ${peekStep.n}` : 'live preview'}</span>
           </div>
-          <Timeline project={project} assets={state.assets} selection={selection} onSelect={onSelect} range={range} onRange={onRange} onEdit={edit} highlight={highlight} fresh={fresh} />
+          <Timeline project={project} assets={state.assets} selection={selection} onSelect={onSelect} range={range} onRange={onRange} onEdit={edit} highlight={highlight} fresh={fresh} readOnly={!!REVIEW} />
           {render.status === 'error' && <div className="render-error">Export failed: {render.error}</div>}
         </section>
-        <Steps state={state} onJump={onJump} onPeek={setPeek} onHover={setHover} onError={setError} />
+        {!REVIEW && <Steps state={state} onJump={onJump} onPeek={setPeek} onHover={setHover} onError={setError} />}
       </main>
 
       {dragging && <div className="dropzone">Drop to add to the timeline</div>}

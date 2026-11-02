@@ -18,7 +18,7 @@ import { LiveCutOAuth } from './oauth.js';
 import { USER_OPS } from './ops.js';
 import { importFile } from './media.js';
 import { FONTS_DIR, measureLoudness, startRender } from './render.js';
-import { loadVersion, setLoudness } from './ops.js';
+import { addMarker, loadVersion, setLoudness } from './ops.js';
 import { EXPORT_DIR, MEDIA_DIR, newId, store } from './store.js';
 
 const PORT = Number(process.env.PORT ?? 4317);
@@ -60,7 +60,8 @@ if (oauth) {
   app.use(mcpAuthRouter({ provider: oauth, issuerUrl: new URL(PUBLIC!), resourceServerUrl: mcpUrl, resourceName: 'LiveCut' }));
   app.post('/oauth/approve', express.urlencoded({ extended: false }), (req, res) => oauth.approve(req.body ?? {}, res));
 } else if (TOKEN && PUBLIC) console.warn('OAuth is off: PUBLIC_URL must be https:// (or localhost) for apps like claude.ai to connect.');
-const OPEN_PATHS = /^\/(\.well-known\/|authorize$|token$|register$|revoke$|oauth\/)/;
+// OAuth endpoints, the built editor's static files, and review links (which carry their own token).
+const OPEN_PATHS = /^\/(\.well-known\/|authorize$|token$|register$|revoke$|oauth\/|assets\/|fonts\/|review\/|rapi\/|rmedia\/)/;
 
 /** MCP accepts the static token or an OAuth access token; a 401 points clients at the OAuth metadata. */
 async function mcpAuth(req: Request, res: Response, next: NextFunction) {
@@ -184,6 +185,12 @@ api.post('/audio/normalize', handle(async req => {
   const target = Number(req.body?.target ?? -14);
   return { summary: await store.edit('normalize_loudness', { target }, d => setLoudness(d, { target, measured }), 'user') };
 }));
+api.post('/projects', handle(req => store.createProject(String(req.body?.name ?? ''))));
+api.post('/projects/:id/open', handle(req => store.openProject(String(req.params.id))));
+api.post('/projects/:id/delete', handle(req => store.deleteProject(String(req.params.id))));
+api.post('/projects/rename', handle(req => store.renameProject(String(req.body?.name ?? ''))));
+api.post('/review-link', handle(() => ({ token: store.ensureReviewToken() })));
+api.post('/review-link/revoke', handle(() => store.revokeReviewToken()));
 api.post('/versions', handle(req => store.saveVersion(String(req.body?.name ?? ''))));
 api.post('/versions/:id/load', handle(async req => {
   const v = store.findVersion(String(req.params.id));
@@ -220,6 +227,40 @@ api.post('/media', upload.array('files', 20), handle(async req => {
   }
 }));
 app.use('/api', api);
+
+/* ---------- review links: watch and leave notes, nothing else ---------- */
+
+const reviewOf = (req: Request) => store.reviewTarget(String(req.params.token ?? ''));
+app.get('/rapi/:token/state', (req, res) => {
+  const t = reviewOf(req);
+  if (!t) return res.status(404).json({ error: 'This review link is no longer valid.' });
+  const p = t.project;
+  const assets = Object.fromEntries(p.media.map(m => [m.id, store.assets[m.id] ?? {}]));
+  res.json({
+    review: true, open: t.open, projectId: t.id, projects: [], project: { ...p, transcripts: [] }, assets,
+    speech: t.open ? store.speechCache() : [], questions: [], versions: [], steps: [], notes: [],
+    control: { mode: 'live', paused: false }, render: { status: 'idle', progress: 0 }, agentConnected: t.open && Date.now() - store.lastAgentSeen < 90_000,
+  });
+});
+app.post('/rapi/:token/note', express.json(), async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const note = { start: Number(b.start), end: Number(b.end), text: String(b.text ?? '').slice(0, 1000), kind: b.kind === 'dont' ? 'dont' as const : 'do' as const };
+    const summary = await store.reviewNote(String(req.params.token), note, d => addMarker(d, { ...note, text: `[Reviewer] ${note.text}` }));
+    res.json({ summary });
+  } catch (e: any) { res.status(400).json({ error: e.message }); }
+});
+app.get('/rmedia/:token/:file', (req, res) => {
+  const t = reviewOf(req);
+  const file = path.basename(String(req.params.file));
+  // Only files that belong to this project's media (originals, proxies, thumbnails, waveforms).
+  if (!t || !t.project.media.some(m => file === m.file || file.startsWith(m.id + '.'))) return res.status(404).end();
+  res.sendFile(path.join(MEDIA_DIR, file), { maxAge: '1h' });
+});
+app.get('/review/:token', (req, res, next) => {
+  if (!reviewOf(req)) return res.status(404).type('text').send('This review link is no longer valid.');
+  if (fs.existsSync(WEB_DIR)) res.sendFile(path.join(WEB_DIR, 'index.html')); else next();
+});
 
 /* ---------- files ---------- */
 

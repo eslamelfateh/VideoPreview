@@ -111,6 +111,7 @@ interface Props {
   onEdit: (op: string, args: Record<string, unknown>) => Promise<unknown>;
   highlight: Set<string>;
   fresh: Set<string>;
+  readOnly?: boolean;
 }
 
 type Drag = { kind: Kind; id: string; mode: 'move' | 'left' | 'right'; x0: number; d: number; moved: boolean };
@@ -118,7 +119,7 @@ type Box = { start: number; end: number; in?: number; out?: number; speed?: numb
 
 const LANE_H = 44, CLIP_H = 32;
 
-export function Timeline({ project, assets, selection, onSelect, range, onRange, onEdit, highlight, fresh }: Props) {
+export function Timeline({ project, assets, selection, onSelect, range, onRange, onEdit, highlight, fresh, readOnly }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(600);
   const [zoom, setZoom] = useState(1);
@@ -207,6 +208,7 @@ export function Timeline({ project, assets, selection, onSelect, range, onRange,
   const itemDown = (kind: Kind, id: string) => (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     e.stopPropagation();
+    if (readOnly) { const lane = (e.currentTarget as HTMLElement).closest('.tl-lanes')!.getBoundingClientRect(); clock.pause(); clock.seek((e.clientX - lane.left) / pps); return; }
     const el = e.currentTarget as HTMLElement;
     const r = el.getBoundingClientRect();
     const edge = Math.min(8, r.width / 4);
@@ -317,7 +319,7 @@ export function Timeline({ project, assets, selection, onSelect, range, onRange,
           </div>
           <div className="lane">{clipsOn('audio', audioClips)}</div>
           {locks.map(m => <div key={m.id} className="lock-shade" style={{ left: x(m.start), width: x(m.end) - x(m.start) }} />)}
-          {range && <div className="range" style={{ left: x(range.start), width: x(range.end) - x(range.start) }} />}
+          {range && <div className="tl-range" style={{ left: x(range.start), width: x(range.end) - x(range.start) }} />}
           <Playhead pps={pps} />
         </div>
       </div>

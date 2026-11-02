@@ -453,6 +453,26 @@ export function createMcpServer(session?: McpSession): McpServer {
 
   editTool('remove_effect', 'Remove zoom', 'Removes an effect.', { effectId: z.string() }, { destructiveHint: true }, ops.removeEffect);
 
+  /* ---------- projects ---------- */
+
+  reg('list_projects', 'List projects', 'All projects on this server; the open one is marked. Edits always apply to the open project.', {}, READ, () => {
+    const ps = store.listProjects();
+    return { ...text(ps.map(p => `${p.id} "${p.name}"${p.current ? ' (open)' : ''} · updated ${new Date(p.updated).toISOString().slice(0, 16).replace('T', ' ')}`).join('\n')), structuredContent: { projects: ps } };
+  });
+  reg('open_project', 'Open a project', 'Switches the editor (and you) to another project. The user sees the switch.', { projectId: z.string() }, { destructiveHint: false, idempotentHint: true }, ({ projectId }) => {
+    store.openProject(projectId);
+    return `Opened "${store.project.name}".`;
+  });
+  reg('create_project', 'New project', 'Creates an empty project and opens it.', { name: z.string().optional() }, { destructiveHint: false }, ({ name }) => {
+    const p = store.createProject(name);
+    return { ...text(`Created and opened "${p.name}" (${p.id}).`), structuredContent: { id: p.id, name: p.name } };
+  });
+  reg('rename_project', 'Rename project', 'Renames the open project.', { name: z.string() }, { destructiveHint: false, idempotentHint: true }, ({ name }) => { store.renameProject(name); return `Renamed to "${store.project.name}".`; });
+  reg('get_review_link', 'Review link', 'A link for a client or teammate to watch the open project and pin notes for you, without being able to edit. Creates it on first use.', {}, { destructiveHint: false, idempotentHint: true }, () => {
+    const token = store.ensureReviewToken();
+    return { ...text(`${PUBLIC_URL()}/review/${token}`), structuredContent: { url: `${PUBLIC_URL()}/review/${token}` } };
+  });
+
   /* ---------- versions ---------- */
 
   reg('save_version', 'Save a version', 'Saves the whole timeline under a name (e.g. "A - fast cuts"), to compare later or switch back to. Saving with an existing name replaces it. Use with load_version to offer the user two versions.', {

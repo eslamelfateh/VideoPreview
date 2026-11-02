@@ -183,7 +183,12 @@ export interface Question {
 /** A saved copy of the whole project, to compare and switch between. */
 export interface VersionInfo { id: string; name: string; time: number; duration: number; clips: number; texts: number; effects: number }
 
+export interface ProjectInfo { id: string; name: string; updated: number; current: boolean }
+
 export interface ServerState {
+  projectId: string;
+  projects: ProjectInfo[];
+  reviewToken?: string;
   project: Project;
   versions: VersionInfo[];
   questions: Question[];

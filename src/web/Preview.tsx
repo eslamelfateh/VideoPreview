@@ -4,7 +4,7 @@ import type { TextItem } from '../shared/types';
 import type { Clip, MediaAssets, Project, ZoomEffect } from '../shared/types';
 import { clock, usePlaying, useTime } from './clock';
 
-const mediaUrl = (file: string) => `/media/${encodeURIComponent(file)}`;
+import { mediaUrl } from './api';
 
 /* ---------- audio: Web Audio gain per media element, so volume can go to 200% and fades are exact ---------- */
 

@@ -39,6 +39,11 @@ input, textarea { font: inherit; color: var(--fg); background: #161616; border: 
 .ghost { background: none; color: var(--muted); }
 .download { color: var(--cap); font-weight: 600; }
 .versions { position: relative; }
+.project-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.review-badge { font-size: 13px; color: var(--cap); border: 1px solid #6b5b2a; border-radius: 8px; padding: 3px 10px; }
+.review-link { display: grid; gap: 6px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+.versions li.current { border-color: var(--cap); }
+.app.reviewing .workspace { grid-template-columns: minmax(0, 1fr); }
 .versions .menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; width: min(360px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 10px; box-shadow: 0 12px 30px #0008; }
 .versions .menu .row { display: flex; gap: 6px; }
 .versions .menu input { flex: 1; min-width: 0; padding: 5px 9px; }
@@ -189,7 +194,7 @@ input, textarea { font: inherit; color: var(--fg); background: #161616; border: 
 .item.n.do.done { background: #22301f; color: #9fd3b0; border-color: #355c3e; }
 .item.n.dont { background: repeating-linear-gradient(135deg, #3a2423 0 6px, #2c1c1b 6px 12px); color: #f0a39e; border: 1px solid #6b3431; }
 .lock-shade { position: absolute; top: 54px; bottom: 0; background: repeating-linear-gradient(135deg, #e0706a14 0 6px, transparent 6px 12px); pointer-events: none; border-left: 1px dashed #e0706a55; border-right: 1px dashed #e0706a55; }
-.range { position: absolute; top: 0; bottom: 0; background: #c3b3f01f; border-left: 1px solid var(--fx); border-right: 1px solid var(--fx); pointer-events: none; }
+.tl-range { position: absolute; top: 0; bottom: 0; background: #c3b3f01f; border-left: 1px solid var(--fx); border-right: 1px solid var(--fx); pointer-events: none; }
 .playhead { position: absolute; top: 0; bottom: 0; left: 0; width: 2px; contain: strict; margin-left: -1px; background: var(--head); pointer-events: none; z-index: 4; will-change: transform; }
 .playhead::before { content: ''; position: absolute; top: 0; left: -5px; border: 6px solid transparent; border-top: 8px solid var(--head); }
 .open-notes { color: var(--cap); font-size: 12.5px; }

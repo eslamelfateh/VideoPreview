@@ -1,14 +1,28 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { applyChanges, clone, conflicts, diff } from '../shared/diff.js';
 import { clipEnd, DUCK_GAP, duration, fmtTime, speechRegions, srcAt } from '../shared/timeline.js';
-import type { Change, Control, MediaAssets, Project, Question, RenderState, ServerState, Step, VersionInfo } from '../shared/types.js';
+import type { Change, Control, MediaAssets, Project, ProjectInfo, Question, RenderState, ServerState, Step, VersionInfo } from '../shared/types.js';
 
 export const DATA_DIR = path.resolve(process.env.LIVECUT_DATA ?? 'data');
 export const MEDIA_DIR = path.join(DATA_DIR, 'media');
 export const EXPORT_DIR = path.join(DATA_DIR, 'exports');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
+export const PROJECTS_DIR = path.join(DATA_DIR, 'projects');
+fs.mkdirSync(PROJECTS_DIR, { recursive: true });
+const projectFile = (id: string) => path.join(PROJECTS_DIR, `${id.replace(/[^\w-]/g, '')}.json`);
+
+/** What is saved per project. */
+interface ProjectFile { project: Project; steps: Step[]; versions: { id: string; name: string; time: number; project: Project }[]; reviewToken?: string; notes?: string[]; updated: number }
+function readProjectFile(id: string): ProjectFile | null {
+  try { return JSON.parse(fs.readFileSync(projectFile(id), 'utf8')); } catch { return null; }
+}
+function writeJson(file: string, v: unknown) {
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(v));
+  fs.renameSync(tmp, file);
+}
 const WAIT_MS = Number(process.env.LIVECUT_WAIT_MS ?? 240_000);
 
 for (const d of [DATA_DIR, MEDIA_DIR, EXPORT_DIR]) fs.mkdirSync(d, { recursive: true });
@@ -54,6 +68,8 @@ class Store {
   assets: Record<string, MediaAssets> = {};
   questions: (Question & { resolve: (answer: string | null) => void })[] = [];
   versions: { id: string; name: string; time: number; project: Project }[] = [];
+  projectId = '';
+  reviewToken: string | undefined;
   lastAgentSeen = 0;
 
   private listeners = new Set<Listener>();
@@ -62,20 +78,158 @@ class Store {
   private saveTimer: NodeJS.Timeout | null = null;
 
   constructor() {
-    try {
-      const s = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-      this.project = { ...emptyProject(), ...s.project };
-      this.steps = (s.steps ?? []).map((x: Step) => (x.status === 'review' || x.status === 'running' ? { ...x, status: 'done' } : x));
-      this.control = { mode: s.control?.mode ?? 'live', paused: false };
-      this.assets = s.assets ?? {};
-      this.versions = s.versions ?? [];
-    } catch { /* first run */ }
+    let s: any = {};
+    try { s = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch { /* first run */ }
+    this.control = { mode: s.control?.mode ?? 'live', paused: false };
+    this.assets = s.assets ?? {};
+    if (s.project) {
+      // Older data kept one project inside state.json: move it into its own file.
+      const id = newId('proj');
+      writeJson(projectFile(id), { project: s.project, steps: s.steps ?? [], versions: s.versions ?? [], updated: Date.now() } satisfies ProjectFile);
+      s.current = id;
+    }
+    const current = s.current && readProjectFile(s.current) ? s.current : this.listProjects()[0]?.id;
+    if (current) this.load(current);
+    else { this.projectId = newId('proj'); this.flush(); }
+  }
+
+  private load(id: string) {
+    const f = readProjectFile(id);
+    if (!f) throw new Error('Project not found.');
+    this.projectId = id;
+    this.project = { ...emptyProject(), ...f.project };
+    this.steps = (f.steps ?? []).map((x: Step) => (x.status === 'review' || x.status === 'running' ? { ...x, status: 'done' } : x));
+    this.versions = f.versions ?? [];
+    this.reviewToken = f.reviewToken;
+    this.notes = f.notes ?? [];
+  }
+
+  /** Writes the current project and the server state now. */
+  flush() {
+    if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
+    writeJson(projectFile(this.projectId), { project: this.project, steps: this.steps, versions: this.versions, reviewToken: this.reviewToken, notes: this.notes, updated: Date.now() } satisfies ProjectFile);
+    writeJson(STATE_FILE, { current: this.projectId, control: this.control, assets: this.assets });
+  }
+
+  listProjects(): ProjectInfo[] {
+    return fs.readdirSync(PROJECTS_DIR).filter(f => f.endsWith('.json')).map(f => {
+      const id = f.slice(0, -5);
+      const st = fs.statSync(path.join(PROJECTS_DIR, f));
+      let name = 'Untitled';
+      if (id === this.projectId) name = this.project.name;
+      else { const pf = readProjectFile(id); if (pf) name = pf.project?.name ?? name; }
+      return { id, name, updated: st.mtimeMs, current: id === this.projectId };
+    }).sort((a, b) => b.updated - a.updated);
+  }
+
+  private beforeSwitch() {
+    if (this.render.status === 'rendering') throw new Error('Wait for the export to finish before switching projects.');
+    if (this.review) this.review.resolve({ approve: true, note: 'The user switched to another project.' });
+    for (const q of [...this.questions]) q.resolve(null);
+    this.flush();
+  }
+
+  createProject(name?: string): ProjectInfo {
+    this.beforeSwitch();
+    this.projectId = newId('proj');
+    this.project = { ...emptyProject(), name: (name ?? '').trim().slice(0, 80) || 'Untitled' };
+    this.steps = []; this.versions = []; this.notes = []; this.reviewToken = undefined;
+    this.render = { status: 'idle', progress: 0 };
+    this.flush(); this.changed();
+    return this.listProjects().find(p => p.id === this.projectId)!;
+  }
+
+  openProject(id: string) {
+    if (id === this.projectId) return;
+    if (!readProjectFile(id)) throw new Error(`No project ${id}.`);
+    this.beforeSwitch();
+    this.load(id);
+    this.render = { status: 'idle', progress: 0 };
+    this.flush(); this.changed();
+  }
+
+  renameProject(name: string) {
+    this.project = { ...this.project, name: name.trim().slice(0, 80) || 'Untitled' };
+    this.changed();
+  }
+
+  /** Deletes a project that is not open, and media files no other project uses. */
+  deleteProject(id: string) {
+    if (id === this.projectId) throw new Error('Open another project before deleting this one.');
+    const f = readProjectFile(id);
+    if (!f) throw new Error(`No project ${id}.`);
+    fs.rmSync(projectFile(id), { force: true });
+    this.removeUnusedMedia(f.project.media.map(m => m.id));
+    this.changed();
+  }
+
+  /** Media ids used by any project (and its saved versions). */
+  private mediaInUse(): Set<string> {
+    const used = new Set<string>();
+    const add = (p: Project) => p.media.forEach(m => used.add(m.id));
+    add(this.project); this.versions.forEach(v => add(v.project));
+    for (const pi of this.listProjects()) {
+      if (pi.id === this.projectId) continue;
+      const f = readProjectFile(pi.id);
+      if (f) { add(f.project); (f.versions ?? []).forEach(v => add(v.project)); }
+    }
+    return used;
+  }
+
+  private removeUnusedMedia(candidates: string[]) {
+    const used = this.mediaInUse();
+    for (const id of candidates) {
+      if (used.has(id)) continue;
+      for (const f of fs.readdirSync(MEDIA_DIR)) if (f.startsWith(id + '.') || f.startsWith(id)) fs.rmSync(path.join(MEDIA_DIR, f), { force: true });
+      delete this.assets[id];
+    }
+  }
+
+  /* ---------- review links ---------- */
+
+  ensureReviewToken(): string {
+    if (!this.reviewToken) { this.reviewToken = randomBytes(18).toString('base64url'); this.changed(); }
+    return this.reviewToken;
+  }
+  revokeReviewToken() { this.reviewToken = undefined; this.changed(); }
+
+  /** The project a review link points to: the open one, or a saved one read from disk. */
+  reviewTarget(token: string): { id: string; project: Project; open: boolean } | null {
+    if (!token) return null;
+    if (this.reviewToken && token === this.reviewToken) return { id: this.projectId, project: this.project, open: true };
+    for (const pi of this.listProjects()) {
+      if (pi.id === this.projectId) continue;
+      const f = readProjectFile(pi.id);
+      if (f?.reviewToken === token) return { id: pi.id, project: { ...emptyProject(), ...f.project }, open: false };
+    }
+    return null;
+  }
+
+  /** A note left on a review link; goes to the open project live, or into the saved file. */
+  async reviewNote(token: string, note: { start: number; end: number; text: string; kind: 'do' | 'dont' }, add: (d: Project) => StepResult) {
+    const t = this.reviewTarget(token);
+    if (!t) throw new Error('This review link is no longer valid.');
+    if (t.open) {
+      const summary = await this.edit('add_note', { ...note, by: 'reviewer' }, add, 'user');
+      this.notes[this.notes.length - 1] = `A reviewer left a note on the review link: ${summary}. Treat it like a request from the user.`;
+      this.changed();
+      return summary;
+    }
+    const f = readProjectFile(t.id)!;
+    const draft = clone({ ...emptyProject(), ...f.project });
+    const res = add(draft);
+    f.project = draft;
+    f.notes = [...(f.notes ?? []), `A reviewer left a note: ${res.summary}.`];
+    f.updated = Date.now();
+    writeJson(projectFile(t.id), f);
+    return res.summary;
   }
 
   /** What the browser needs. Transcripts are left out: they can be large and the editor never reads them. */
   snapshot(): ServerState {
     const slim = (c: Change) => (c.coll === 'transcripts' ? { coll: c.coll, id: c.id } : c);
     return {
+      projectId: this.projectId, projects: this.listProjects(), reviewToken: this.reviewToken,
       project: { ...this.project, transcripts: this.project.transcripts.map(t => ({ mediaId: t.mediaId, language: t.language, words: [] })) },
       assets: this.assets,
       questions: this.questions.map(({ resolve: _r, ...q }) => q),
@@ -102,11 +256,7 @@ class Store {
     for (const fn of this.listeners) fn(s);
     for (const w of this.waiters) w();
     if (this.saveTimer) clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => {
-      const tmp = STATE_FILE + '.tmp';
-      fs.writeFileSync(tmp, JSON.stringify({ project: this.project, steps: this.steps, control: this.control, assets: this.assets, versions: this.versions }));
-      fs.renameSync(tmp, STATE_FILE);
-    }, 300);
+    this.saveTimer = setTimeout(() => this.flush(), 300);
   }
 
   private waitUntil(ready: () => boolean, ms = WAIT_MS): Promise<boolean> {
@@ -287,11 +437,13 @@ class Store {
 
   setRender(r: Partial<RenderState>) { this.render = { ...this.render, ...r }; this.changed(); }
 
+  /** Empties the open project (keeps its name and review link); media no other project uses is deleted. */
   reset() {
     if (this.review) this.review.resolve({ approve: false, note: 'The user reset the project.' });
-    this.project = emptyProject(); this.steps = []; this.notes = []; this.assets = {}; this.versions = [];
+    const media = [...this.project.media.map(m => m.id), ...this.versions.flatMap(v => v.project.media.map(m => m.id))];
+    this.project = { ...emptyProject(), name: this.project.name }; this.steps = []; this.notes = []; this.versions = [];
     for (const q of [...this.questions]) q.resolve(null); this.render = { status: 'idle', progress: 0 };
-    for (const f of fs.readdirSync(MEDIA_DIR)) fs.rmSync(path.join(MEDIA_DIR, f), { force: true });
+    this.removeUnusedMedia(media);
     this.changed();
   }
 }

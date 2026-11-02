@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { mediaUrl } from './api';
 
 /** Caches for timeline thumbnails (sprites) and waveform peaks, loaded once per media file. */
 const images = new Map<string, Promise<HTMLImageElement>>();
@@ -11,7 +12,7 @@ export function loadImage(file: string): Promise<HTMLImageElement> {
       const img = new Image();
       img.onload = () => resolve(img);
       img.onerror = reject;
-      img.src = `/media/${encodeURIComponent(file)}`;
+      img.src = mediaUrl(file);
     });
     images.set(file, p);
   }
@@ -21,7 +22,7 @@ export function loadImage(file: string): Promise<HTMLImageElement> {
 export function loadPeaks(file: string): Promise<Uint8Array> {
   let p = peaks.get(file);
   if (!p) {
-    p = fetch(`/media/${encodeURIComponent(file)}`, { credentials: 'same-origin' })
+    p = fetch(mediaUrl(file), { credentials: 'same-origin' })
       .then(r => { if (!r.ok) throw new Error('peaks'); return r.arrayBuffer(); })
       .then(b => new Uint8Array(b));
     peaks.set(file, p);
