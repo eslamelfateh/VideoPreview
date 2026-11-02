@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CAPTION_PRESETS, clipEnd, clipLen, DUCK_GAP, duration, POSITION_MARGIN, positionOf, presetOf, speechRegions, TEXT_LAYOUT as L } from '../shared/timeline.js';
+import { CAPTION_PRESETS, clipEnd, clipLen, dipAt, DUCK_GAP, speedOf, srcAt, duration, POSITION_MARGIN, positionOf, presetOf, speechRegions, TEXT_LAYOUT as L } from '../shared/timeline.js';
 import type { Clip, Media, Project, TextItem, ZoomEffect } from '../shared/types.js';
 import { FFMPEG, mediaPath } from './media.js';
 import { EXPORT_DIR, store } from './store.js';
@@ -119,7 +119,9 @@ function runsFor(clips: Clip[], fps: number, media: Map<string, Media>): Run[] {
   for (const s of segs) {
     const last = runs[runs.length - 1], prev = last?.segs[last.segs.length - 1];
     const srcEnd = prev ? prev.iF + prev.lF : 0;
+    // Only plain back-to-back pieces join: same file, normal speed, no fade to black at the cut.
     const joinable = prev && last.mediaId === s.clip.mediaId && media.get(s.clip.mediaId)?.kind !== 'image'
+      && speedOf(s.clip) === 1 && speedOf(prev.clip) === 1 && !prev.clip.videoFadeOut && !s.clip.videoFadeIn
       && s.sF === prev.sF + prev.lF && s.iF >= srcEnd - 1;
     if (joinable) {
       if (s.iF < srcEnd) s.iF = srcEnd; // a one-frame rounding overlap: take the next source frame instead
@@ -159,6 +161,22 @@ function duckExpr(p: Project, from: number, to: number): string | null {
   return `(1-${n(1 - f)}*min(1,${terms.join('+')}))`;
 }
 
+/** Cover-crop to the canvas, positioned by the reframe keys (same easing as reframeAt in the preview). */
+function cropFilter(p: Project, W: number, H: number): string {
+  const keys = p.reframe;
+  if (!keys?.length) return `crop=${W}:${H}`;
+  const axis = (k: 'x' | 'y') => {
+    let e = n(keys[keys.length - 1][k]);
+    for (let i = keys.length - 1; i >= 1; i--) {
+      const a = keys[i - 1], b = keys[i];
+      const u = `clip((t-${n(a.t)})/${n(Math.max(1e-6, b.t - a.t))},0,1)`;
+      e = `if(lte(t,${n(b.t)}),${n(a[k])}+(${n(b[k] - a[k])})*${u}*${u}*(3-2*${u}),${e})`;
+    }
+    return `if(lte(t,${n(keys[0].t)}),${n(keys[0][k])},${e})`;
+  };
+  return `crop=${W}:${H}:x='(iw-ow)*${axis('x')}':y='(ih-oh)*${axis('y')}'`;
+}
+
 /* ---------- full ffmpeg command ---------- */
 
 export type Quality = 'final' | 'draft';
@@ -188,14 +206,20 @@ export function buildCommand(p: Project, out: string, assFile: string, quality: 
       const m = media.get(run.mediaId)!;
       const first = run.segs[0], lastSeg = run.segs[run.segs.length - 1];
       const startT = first.sF / fps, frames = run.segs.reduce((a, s) => a + s.lF, 0);
-      const srcFrom = first.iF / fps, srcTo = (lastSeg.iF + lastSeg.lF) / fps;
+      const sp = speedOf(first.clip);
+      const srcFrom = first.clip.in, srcTo = sp === 1 ? (lastSeg.iF + lastSeg.lF) / fps : first.clip.out;
       if (m.kind === 'image') args.push('-loop', '1', '-framerate', String(fps), '-t', n(frames / fps), '-i', mediaPath(m));
-      else args.push('-ss', n(srcFrom), '-t', n(srcTo - srcFrom + 1 / fps), '-i', mediaPath(m));
+      else args.push('-ss', n(sp === 1 ? first.iF / fps : srcFrom), '-t', n(srcTo - (sp === 1 ? first.iF / fps : srcFrom) + (2 * sp) / fps), '-i', mediaPath(m));
       const i = idx++;
       const single = run.segs.length === 1;
+      const endT = startT + frames / fps;
+      const dips = (first.clip.videoFadeIn ? `,fade=t=in:st=${n(startT)}:d=${n(first.clip.videoFadeIn)}:color=black` : '')
+        + (lastSeg.clip.videoFadeOut ? `,fade=t=out:st=${n(endT - lastSeg.clip.videoFadeOut)}:d=${n(lastSeg.clip.videoFadeOut)}:color=black` : '');
       if (wantV && track === 'video' && m.kind !== 'audio') {
         const sel = single ? `trim=end_frame=${frames},` : `select='${pick(run.segs, first.iF)}',`;
-        f.push(`[${i}:v]fps=${fps},${sel}setpts=N/${fps}/TB+${n(startT)}/TB,scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1,format=yuv420p[v${i}]`);
+        const stretch = sp !== 1 ? `setpts=(PTS-STARTPTS)/${n(sp)},` : '';
+        const dimF = first.clip.stillDim ? `,format=rgb24,colorchannelmixer=rr=${n(1 - first.clip.stillDim)}:gg=${n(1 - first.clip.stillDim)}:bb=${n(1 - first.clip.stillDim)},format=yuv420p` : '';
+        f.push(`[${i}:v]${stretch}fps=${fps},${sel}setpts=N/${fps}/TB+${n(startT)}/TB,scale=${W}:${H}:force_original_aspect_ratio=increase,${cropFilter(p, W, H)},setsar=1,format=yuv420p${dips}${dimF}[v${i}]`);
         if (fullCover) {
           if (padTo > 0) { f.push(`[v${i}]tpad=stop=${padTo}:stop_mode=add:color=black[vp${i}]`); base = `vp${i}`; } else base = `v${i}`;
         }
@@ -210,7 +234,12 @@ export function buildCommand(p: Project, out: string, assFile: string, quality: 
         const duck = track === 'audio' ? duckExpr(p, startT, startT + frames / fps) : null;
         const vol = [gain, duck].filter(Boolean).join('*');
         const clean = run.segs.some(s => s.clip.denoise) ? 'afftdn=nf=-25,' : '';
-        f.push(`[${i}:a]aresample=${SR},${clean}asetpts=N/SR/TB,${sel}asetpts=N/SR/TB${vol ? `,volume='${vol}':eval=frame` : ''},adelay=${Math.round(startT * 1000)}:all=1[a${i}]`);
+        // atempo keeps the pitch; each filter handles 0.5-2x, so chain them for larger changes.
+        let tempo = '', left = sp;
+        while (left > 2.0001) { tempo += 'atempo=2,'; left /= 2; }
+        while (left < 0.4999) { tempo += 'atempo=0.5,'; left /= 0.5; }
+        if (Math.abs(left - 1) > 1e-6) tempo += `atempo=${n(left)},`;
+        f.push(`[${i}:a]asetpts=PTS-STARTPTS,${tempo}aresample=${SR},${clean}asetpts=N/SR/TB,${sel}asetpts=N/SR/TB${vol ? `,volume='${vol}':eval=frame` : ''},adelay=${Math.round(startT * 1000)}:all=1[a${i}]`);
         audio.push(`[a${i}]`);
       }
     }
@@ -313,12 +342,13 @@ export function sliceProject(p: Project, s: number, e: number): Project {
   for (const c of p.clips) {
     const ce = clipEnd(c);
     if (ce <= s || c.start >= e) continue;
-    const cut = Math.max(0, s - c.start);
-    clips.push({ ...c, start: Math.max(0, c.start - s), in: c.in + cut, out: Math.min(c.out, c.in + (e - c.start)), fadeIn: undefined, fadeOut: undefined, volume: c.volume });
+    const dim = dipAt(c, Math.max(s, c.start));
+    clips.push({ ...c, start: Math.max(0, c.start - s), in: srcAt(c, Math.max(s, c.start)), out: Math.min(c.out, srcAt(c, e)), fadeIn: undefined, fadeOut: undefined,
+      videoFadeIn: undefined, videoFadeOut: undefined, stillDim: dim > 0 ? dim : undefined, volume: c.volume });
   }
   const shift = <T extends { start: number; end: number }>(xs: T[]) => xs.filter(x => x.end > s && x.start < e).map(x => ({ ...x, start: x.start - s, end: x.end - s }));
   const texts = shift(p.texts).map(t => t.words ? { ...t, words: t.words.map(w => ({ ...w, start: w.start - s, end: w.end - s })) } : t);
-  return { ...p, clips, texts, effects: shift(p.effects), markers: [] };
+  return { ...p, clips, texts, effects: shift(p.effects), markers: [], reframe: p.reframe?.map(k => ({ ...k, t: k.t - s })) };
 }
 
 function runFfmpeg(args: string[]): Promise<void> {
@@ -415,4 +445,20 @@ export async function measureLoudness(p: Project): Promise<number> {
     if (!Number.isFinite(v) || v < -70) throw new Error('The mix is silent.');
     return v;
   } finally { for (const f of [ass, wav, wav + '.filter']) fs.rmSync(f, { force: true }); }
+}
+
+/** The whole source frame at a timeline time, with the current crop window drawn on it. */
+export async function renderSourceFrame(p: Project, t: number, mediaFile: string, srcTime: number, srcW: number, srcH: number, width = 720): Promise<Buffer> {
+  const { reframeAt } = await import('../shared/timeline.js');
+  const pos = reframeAt(p.reframe, t);
+  const scale = Math.max(p.width / srcW, p.height / srcH);
+  const cw = p.width / scale, ch = p.height / scale; // crop window in source pixels
+  const x = (srcW - cw) * pos.x, y = (srcH - ch) * pos.y;
+  const base = tmpBase(), png = base + '.png';
+  try {
+    await runFfmpeg(['-v', 'error', '-y', '-ss', n(Math.max(0, srcTime)), '-i', mediaFile, '-frames:v', '1', '-vf',
+      `drawbox=x=${Math.round(x)}:y=${Math.round(y)}:w=${Math.round(cw)}:h=${Math.round(ch)}:color=yellow@0.9:t=${Math.max(4, Math.round(srcW / 200))},` +
+      `drawgrid=w=iw/10:h=ih/10:t=1:c=white@0.25,scale=${width}:-2`, png]);
+    return fs.readFileSync(png);
+  } finally { fs.rmSync(png, { force: true }); }
 }

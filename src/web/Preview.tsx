@@ -1,5 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { activeWord, clipAt, clipEnd, duckFactor, masterGain, POSITION_MARGIN, positionOf, presetOf, textsAt, TEXT_LAYOUT as L, zoomAt } from '../shared/timeline';
+import { activeWord, clipAt, clipEnd, dipAt, duckFactor, srcAt, masterGain, POSITION_MARGIN, positionOf, presetOf, reframeAt, textsAt, TEXT_LAYOUT as L, zoomAt } from '../shared/timeline';
 import type { TextItem } from '../shared/types';
 import type { Clip, MediaAssets, Project, ZoomEffect } from '../shared/types';
 import { clock, usePlaying, useTime } from './clock';
@@ -89,7 +89,9 @@ export const Preview = memo(function Preview({ project, assets, speech, peeking,
         if (key === nKey && nextV && key !== vKey && !el.seeking && Math.abs(el.currentTime - nextV.in) > 0.05) el.currentTime = nextV.in;
         continue;
       }
-      const target = clip.in + (time - clip.start);
+      const target = srcAt(clip, time);
+      const rate = clip.speed ?? 1;
+      if (el.playbackRate !== rate) el.playbackRate = rate;
       // Same levels as the export: clip volume and fades, music ducking under speech, loudness gain.
       const g = gainFor(el), level = clipGain(clip, time) * (clip.track === 'audio' ? duckFactor(project.audio, speech, time) : 1) * masterGain(project.audio);
       if (g) { g.gain.value = level; el.volume = 1; } else el.volume = Math.min(1, level);
@@ -106,6 +108,8 @@ export const Preview = memo(function Preview({ project, assets, speech, peeking,
 
   const scale = size.w / project.width;
   const z = zoomAt(project.effects, time);
+  const rf = reframeAt(project.reframe, time);
+  const objectPosition = `${rf.x * 100}% ${rf.y * 100}%`;
   const texts = textsAt(project.texts, time);
   const base = Math.min(project.width, project.height) * scale;
   const pad = `0 ${project.width * L.side * scale}px`;
@@ -123,17 +127,18 @@ export const Preview = memo(function Preview({ project, assets, speech, peeking,
       <div className="layer" style={{ transform: `scale(${z.scale})`, transformOrigin: `${z.x * 100}% ${z.y * 100}%` }}>
         {project.media.filter(m => used.has(m.id)).flatMap(m => {
           const ref = (key: string) => (el: HTMLMediaElement | null) => { if (el) els.current.set(key, el); else els.current.delete(key); };
-          if (m.kind === 'image') return v?.mediaId === m.id ? [<img key={m.id} src={mediaUrl(m.file)} alt="" className="media on" />] : [];
+          if (m.kind === 'image') return v?.mediaId === m.id ? [<img key={m.id} src={mediaUrl(m.file)} alt="" className="media on" style={{ objectPosition }} />] : [];
           const out = [];
           if (project.clips.some(c => c.mediaId === m.id && c.track === 'audio')) out.push(<audio key={`${m.id}:a`} src={mediaUrl(m.file)} preload="auto" ref={ref(`${m.id}:a`)} />);
           if (m.kind === 'video') for (const slot of [0, 1]) {
             const key = `${m.id}:${slot}`;
-            out.push(<video key={key} src={mediaUrl(assets[m.id]?.proxy?.file ?? m.file)} preload="auto" playsInline className={`media${vKey === key ? ' on' : ''}`} ref={ref(key)} />);
+            out.push(<video key={key} src={mediaUrl(assets[m.id]?.proxy?.file ?? m.file)} preload="auto" playsInline className={`media${vKey === key ? ' on' : ''}`} style={{ objectPosition }} ref={ref(key)} />);
           }
           return out;
         })}
       </div>
       {texts.map(t => <Overlay key={t.id} t={t} time={time} scale={scale} base={base} pad={pad} H={project.height} />)}
+      {dipAt(v, time) > 0 && <div className="dip" style={{ opacity: dipAt(v, time) }} />}
       {!v && <div className="empty-frame">{project.clips.length ? 'No video here' : 'Drop a video anywhere to start'}</div>}
       {z.scale > 1.001 && <div className="badge zoom">ZOOM {z.scale.toFixed(2)}×</div>}
       {peeking && <div className="badge before">BEFORE</div>}

@@ -61,6 +61,7 @@ input, textarea { font: inherit; color: var(--fg); background: #161616; border: 
 .ov.caption.boxed .box { display: inline; background: #0000009e; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 .ov.caption.boxed .box span { margin: 0 .1em; }
 .ov.title { line-height: 1.25; }
+.dip { position: absolute; inset: 0; background: #000; pointer-events: none; }
 .empty-frame { position: absolute; inset: 0; display: grid; place-items: center; color: var(--faint); font-size: 13px; text-align: center; padding: 16px; }
 .badge { position: absolute; top: 10px; font: 500 11px var(--mono); padding: 3px 7px; border-radius: 6px; pointer-events: none; }
 .badge.zoom { left: 10px; background: var(--fx); color: var(--fx-ink); }
@@ -107,6 +108,10 @@ input, textarea { font: inherit; color: var(--fg); background: #161616; border: 
 .p-pop b { font-size: 19px; color: var(--cap); }
 .p-minimal b { font-weight: 600; -webkit-text-stroke: 0; text-shadow: 0 1px 3px #000; }
 .p-bold b { color: var(--cap); font-weight: 900; }
+.keylist { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font: 12px var(--mono); }
+.keylist li { display: flex; align-items: center; gap: 8px; }
+.keylist li span { color: var(--muted); flex: 1; }
+.keylist button { padding: 1px 6px; font: inherit; }
 .check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fg); flex-wrap: wrap; }
 .check input { width: auto; accent-color: var(--cap); }
 .audio-settings { display: grid; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }

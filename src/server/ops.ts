@@ -1,4 +1,4 @@
-import { clipEnd, clipLen, duration, fmtTime, round, timelineWords, trackEnd } from '../shared/timeline.js';
+import { clipEnd, clipLen, duration, fmtTime, round, speedOf, srcAt, timelineWords, tlAt, trackEnd } from '../shared/timeline.js';
 import type { CaptionPreset, Clip, Marker, Media, Project, TextItem, TextPosition, Track, Word, ZoomEffect } from '../shared/types.js';
 import { CAPTION_PRESETS } from '../shared/timeline.js';
 import { newId, type StepResult } from './store.js';
@@ -26,19 +26,21 @@ function checkClip(c: Clip, m: Media) {
   if (m.kind !== 'image' && c.out > m.duration) c.out = t3(m.duration);
   if (c.out - c.in < 0.05) throw new Error('A clip must be at least 0.05s long.');
   if (c.start < 0) c.start = 0;
-  const len = c.out - c.in;
+  const len = clipLen(c);
   c.fadeIn = Math.min(c.fadeIn ?? 0, len / 2) || undefined;
   c.fadeOut = Math.min(c.fadeOut ?? 0, len / 2) || undefined;
+  c.videoFadeIn = Math.min(c.videoFadeIn ?? 0, len / 2) || undefined;
+  c.videoFadeOut = Math.min(c.videoFadeOut ?? 0, len / 2) || undefined;
 }
 
 /** Splits whichever clip on a track spans t, returning true if one did. */
 function splitTrackAt(d: Project, track: Track, t: number): boolean {
   const c = d.clips.find(x => x.track === track && t > x.start + 0.01 && t < clipEnd(x) - 0.01);
   if (!c) return false;
-  const cut = t3(c.in + (t - c.start));
-  d.clips.push({ ...c, id: newId('clip'), start: t3(t), in: cut, fadeIn: undefined });
+  const cut = t3(srcAt(c, t));
+  d.clips.push({ ...c, id: newId('clip'), start: t3(t), in: cut, fadeIn: undefined, videoFadeIn: undefined });
   c.out = cut;
-  c.fadeOut = undefined;
+  c.fadeOut = undefined; c.videoFadeOut = undefined;
   return true;
 }
 
@@ -57,12 +59,12 @@ export function addClip(d: Project, a: { mediaId: string; track?: Track; start?:
   return { summary: `Added ${m.name} to ${track} at ${fmtTime(c.start)} (${t3(clipLen(c))}s)`, at: c.start, detail: `clipId: ${c.id}` };
 }
 
-export function updateClip(d: Project, a: { clipId: string; start?: number; in?: number; out?: number; volume?: number; fadeIn?: number; fadeOut?: number; denoise?: boolean }): StepResult {
+export function updateClip(d: Project, a: { clipId: string; start?: number; in?: number; out?: number; volume?: number; fadeIn?: number; fadeOut?: number; denoise?: boolean; videoFadeIn?: number; videoFadeOut?: number }): StepResult {
   const c = getClip(d, a.clipId);
   const m = getMedia(d, c.mediaId);
   const parts: string[] = [];
   if (typeof a.denoise === 'boolean') { c.denoise = a.denoise || undefined; parts.push(`noise reduction ${a.denoise ? 'on' : 'off'}`); }
-  for (const k of ['start', 'in', 'out', 'volume', 'fadeIn', 'fadeOut'] as const) {
+  for (const k of ['start', 'in', 'out', 'volume', 'fadeIn', 'fadeOut', 'videoFadeIn', 'videoFadeOut'] as const) {
     const v = opt(a[k], k);
     if (v === undefined) continue;
     (c as any)[k] = k === 'volume' ? Math.max(0, Math.min(2, v)) : t3(v);
@@ -77,9 +79,9 @@ export function splitClip(d: Project, a: { clipId: string; at: number }): StepRe
   const at = num(a.at, 'at');
   if (at <= c.start + 0.01 || at >= clipEnd(c) - 0.01) throw new Error(`Split point must be inside the clip (${c.start}–${t3(clipEnd(c))}).`);
   const before = new Set(d.clips.map(x => x.id));
-  const cut = t3(c.in + (at - c.start));
-  d.clips.push({ ...c, id: newId('clip'), start: t3(at), in: cut, fadeIn: undefined });
-  c.out = cut; c.fadeOut = undefined;
+  const cut = t3(srcAt(c, at));
+  d.clips.push({ ...c, id: newId('clip'), start: t3(at), in: cut, fadeIn: undefined, videoFadeIn: undefined });
+  c.out = cut; c.fadeOut = undefined; c.videoFadeOut = undefined;
   const right = d.clips.find(x => !before.has(x.id))!;
   return { summary: `Split clip at ${fmtTime(at)}`, at, detail: `left: ${c.id}, right: ${right.id}` };
 }
@@ -111,6 +113,7 @@ export function cutRange(d: Project, a: { start: number; end: number }): StepRes
   d.texts = shift(d.texts).map(t => t.words ? { ...t, words: t.words.filter(w => w.start < s || w.start >= e).map(w => w.start >= e ? { ...w, start: t3(w.start - len), end: t3(w.end - len) } : w) } : t);
   d.effects = shift(d.effects);
   d.markers = shift(d.markers);
+  if (d.reframe) d.reframe = d.reframe.filter(k => k.t < s || k.t >= e).map(k => (k.t >= e ? { ...k, t: t3(k.t - len) } : k));
   return { summary: `Cut ${fmtTime(s)} → ${fmtTime(e)} (${t3(len)}s) and closed the gap`, at: s };
 }
 
@@ -145,8 +148,8 @@ export function removeSilences(d: Project, a: { minPause?: number; padding?: num
     if (!tr) regions.push([c.in, c.out]);
     // Outside the requested range everything is kept, as if it were speech.
     const keep: Word[] = [];
-    if (tr && rs > c.start) keep.push({ text: '', start: c.in - padding, end: Math.min(c.out, c.in + (rs - c.start)) - padding });
-    if (tr && re < clipEnd(c)) keep.push({ text: '', start: Math.max(c.in, c.in + (re - c.start)) + padding, end: c.out + padding });
+    if (tr && rs > c.start) keep.push({ text: '', start: c.in - padding, end: Math.min(c.out, srcAt(c, rs)) - padding });
+    if (tr && re < clipEnd(c)) keep.push({ text: '', start: Math.max(c.in, srcAt(c, re)) + padding, end: c.out + padding });
     const speech = (tr?.words.filter(w => w.end > c.in && w.start < c.out) ?? []).concat(keep.filter(k => k.end > k.start)).sort((x, y) => x.start - y.start);
     for (const w of speech) {
       const s = Math.max(c.in, w.start - padding), e = Math.min(c.out, w.end + padding);
@@ -154,9 +157,9 @@ export function removeSilences(d: Project, a: { minPause?: number; padding?: num
       if (last && s - last[1] < minPause) last[1] = Math.max(last[1], e); else regions.push([s, e]);
     }
     regions.forEach(([s, e], i) => {
-      next.push({ ...c, id: i === 0 ? c.id : newId('clip'), start: t3(cursor), in: t3(s), out: t3(e), fadeIn: undefined, fadeOut: undefined });
-      pieces.push({ oldS: c.start + (s - c.in), oldE: c.start + (e - c.in), newS: cursor });
-      cursor += e - s;
+      next.push({ ...c, id: i === 0 ? c.id : newId('clip'), start: t3(cursor), in: t3(s), out: t3(e), fadeIn: undefined, fadeOut: undefined, videoFadeIn: undefined, videoFadeOut: undefined });
+      pieces.push({ oldS: tlAt(c, s), oldE: tlAt(c, e), newS: cursor });
+      cursor += (e - s) / speedOf(c);
     });
   }
   d.clips = d.clips.filter(c => c.track !== 'video').concat(next);
@@ -171,6 +174,7 @@ export function removeSilences(d: Project, a: { minPause?: number; padding?: num
   const move = <T extends { start: number; end: number }>(x: T): T => ({ ...x, start: t3(map(x.start)), end: t3(map(x.end)) });
   d.texts = d.texts.map(t => ({ ...move(t), ...(t.words ? { words: t.words.map(move) } : {}) })).filter(t => t.end - t.start > 0.05);
   d.effects = d.effects.map(move).filter(e => e.end - e.start > 0.05);
+  if (d.reframe) d.reframe = d.reframe.map(k => ({ ...k, t: t3(map(k.t)) }));
   d.markers = d.markers.map(m => {
     if (m.kind !== 'dont') return move(m);
     const s = map(m.start);
@@ -343,6 +347,82 @@ export function setCanvas(d: Project, a: { width: number; height: number; fps?: 
   return { summary: `Canvas ${d.width}×${d.height} @ ${d.fps}fps` };
 }
 
+/* ---------- speed and transitions ---------- */
+
+/** Moves texts, zooms, notes and framing keys through a piecewise time mapping (old timeline → new). */
+function remapTimes(d: Project, map: (t: number) => number) {
+  const move = <T extends { start: number; end: number }>(x: T): T => ({ ...x, start: t3(map(x.start)), end: t3(map(x.end)) });
+  d.texts = d.texts.map(t => ({ ...move(t), ...(t.words ? { words: t.words.map(move) } : {}) })).filter(t => t.end - t.start > 0.05);
+  d.effects = d.effects.map(move).filter(e => e.end - e.start > 0.05);
+  d.markers = d.markers.map(move).filter(m => m.end - m.start > 0.05);
+  if (d.reframe) d.reframe = d.reframe.map(k => ({ ...k, t: t3(map(k.t)) }));
+}
+
+/** Plays a range (or one clip) of the video track faster or slower; everything after it moves. */
+export function setSpeed(d: Project, a: { speed: number; clipId?: string; start?: number; end?: number }): StepResult {
+  const speed = Math.round(Math.max(0.25, Math.min(4, num(a.speed, 'speed'))) * 100) / 100;
+  let s: number, e: number;
+  if (a.clipId) { const c = getClip(d, a.clipId); s = c.start; e = clipEnd(c); }
+  else { s = opt(a.start, 'start') ?? 0; e = opt(a.end, 'end') ?? trackEnd(d, 'video'); }
+  if (e - s < 0.05) throw new Error('The range is too short.');
+  splitTrackAt(d, 'video', s); splitTrackAt(d, 'video', e);
+  const hit = d.clips.filter(c => c.track === 'video' && c.start >= s - 1e-6 && clipEnd(c) <= e + 1e-6).sort((x, y) => x.start - y.start);
+  if (!hit.length) throw new Error('No video in that range.');
+  const pieces: { oldS: number; oldE: number; newS: number; k: number }[] = [];
+  let cursor = hit[0].start;
+  for (const c of hit) {
+    const oldS = c.start, oldE = clipEnd(c), k = speedOf(c) / speed;
+    c.speed = speed === 1 ? undefined : speed;
+    c.start = t3(cursor);
+    pieces.push({ oldS, oldE, newS: cursor, k });
+    cursor = clipEnd(c);
+  }
+  const oldEnd = pieces[pieces.length - 1].oldE, delta = cursor - oldEnd;
+  for (const c of d.clips) if (c.track === 'video' && !hit.includes(c) && c.start >= oldEnd - 1e-6) c.start = t3(c.start + delta);
+  remapTimes(d, t => {
+    if (t < pieces[0].oldS) return t;
+    for (const p of pieces) if (t <= p.oldE) return p.newS + (Math.max(t, p.oldS) - p.oldS) * p.k;
+    return t + delta;
+  });
+  return { summary: `Speed ${speed}× from ${fmtTime(s)} (${delta >= 0 ? '+' : ''}${t3(delta)}s)`, at: s };
+}
+
+/** A fade through black at a cut, or a fade in/out at the very start or end. */
+export function addTransition(d: Project, a: { at: number; duration?: number }): StepResult {
+  const at = num(a.at, 'at'), dur = Math.max(0.1, Math.min(3, opt(a.duration, 'duration') ?? 0.6));
+  const video = d.clips.filter(c => c.track === 'video');
+  const left = video.find(c => Math.abs(clipEnd(c) - at) < 0.08), right = video.find(c => Math.abs(c.start - at) < 0.08);
+  if (!left && !right) throw new Error(`No cut at ${fmtTime(at)}. Use list_items kind "clips" to find clip edges (or 0 / the end for a fade in / out).`);
+  const half = left && right ? dur / 2 : dur;
+  if (left) { left.videoFadeOut = Math.min(half, clipLen(left) / 2); left.fadeOut = Math.max(left.fadeOut ?? 0, Math.min(0.15, half)); }
+  if (right) { right.videoFadeIn = Math.min(half, clipLen(right) / 2); right.fadeIn = Math.max(right.fadeIn ?? 0, Math.min(0.15, half)); }
+  const kind = left && right ? 'Fade through black' : right ? 'Fade in from black' : 'Fade out to black';
+  return { summary: `${kind} at ${fmtTime(at)} (${t3(dur)}s)`, at: Math.max(0, at - dur) };
+}
+
+/* ---------- reframing ---------- */
+
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+const sortKeys = (d: Project) => { d.reframe = (d.reframe ?? []).sort((a, b) => a.t - b.t); if (!d.reframe.length) d.reframe = undefined; };
+
+/** Replaces all crop keyframes (x/y: 0 = left/top edge of the source, 0.5 = center, 1 = right/bottom). */
+export function setReframe(d: Project, a: { keys: { time: number; x?: number; y?: number }[] }): StepResult {
+  if (!Array.isArray(a.keys)) throw new Error('keys must be a list of { time, x, y }.');
+  d.reframe = a.keys.map(k => ({ t: t3(num(k.time, 'time')), x: clamp01(opt(k.x, 'x') ?? 0.5), y: clamp01(opt(k.y, 'y') ?? 0.5) }));
+  sortKeys(d);
+  return { summary: d.reframe ? `Reframed with ${d.reframe.length} keyframe(s)` : 'Reframing cleared (centered)', at: d.reframe?.[0]?.t };
+}
+
+/** Adds a crop keyframe, or moves the one within 0.1 s of that time. */
+export function setReframeKey(d: Project, a: { time: number; x?: number; y?: number; remove?: boolean }): StepResult {
+  const t = t3(num(a.time, 'time'));
+  const keys = (d.reframe ?? []).filter(k => Math.abs(k.t - t) > 0.1);
+  if (!a.remove) keys.push({ t, x: clamp01(opt(a.x, 'x') ?? 0.5), y: clamp01(opt(a.y, 'y') ?? 0.5) });
+  d.reframe = keys;
+  sortKeys(d);
+  return { summary: a.remove ? `Removed the framing key at ${fmtTime(t)}` : `Framing at ${fmtTime(t)}: ${Math.round((opt(a.x, 'x') ?? 0.5) * 100)}% across, ${Math.round((opt(a.y, 'y') ?? 0.5) * 100)}% down`, at: t };
+}
+
 /* ---------- project audio ---------- */
 
 export function setDucking(d: Project, a: { enabled?: boolean; amount?: number; attack?: number; release?: number }): StepResult {
@@ -378,5 +458,5 @@ export const USER_OPS: Record<string, (d: Project, a: any) => StepResult> = {
   add_text: addText, update_text: updateText, remove_text: removeText,
   add_zoom: addZoom, update_effect: updateEffect, remove_effect: removeEffect,
   add_note: addMarker, update_note: updateMarker, remove_note: removeMarker,
-  set_canvas: setCanvas, add_clip: addClip, set_ducking: setDucking, set_denoise: setDenoise, set_caption_style: setCaptionStyle, set_loudness_off: (d: Project) => setLoudness(d, { off: true }),
+  set_canvas: setCanvas, add_clip: addClip, set_ducking: setDucking, set_denoise: setDenoise, set_caption_style: setCaptionStyle, set_reframe_key: setReframeKey, set_reframe: setReframe, set_speed: setSpeed, add_transition: addTransition, set_loudness_off: (d: Project) => setLoudness(d, { off: true }),
 };

@@ -1,7 +1,7 @@
 import { COLLECTIONS, type Change, type Project } from './types.js';
 
 const key = (v: unknown) => JSON.stringify(v);
-const SETTINGS = ['name', 'width', 'height', 'fps', 'audio'] as const;
+const SETTINGS = ['name', 'width', 'height', 'fps', 'audio', 'reframe'] as const;
 const settingsOf = (p: Project) => Object.fromEntries(SETTINGS.map(k => [k, (p as any)[k]]));
 
 /** Entity-level diff between two project versions. */

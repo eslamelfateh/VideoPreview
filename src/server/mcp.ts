@@ -9,7 +9,9 @@ import type { Project } from '../shared/types.js';
 import { analyze } from './assets.js';
 import { importFile } from './media.js';
 import * as ops from './ops.js';
-import { audioLevels, measureLoudness, renderContactSheet, renderJob, renderStill, startRender, type Quality } from './render.js';
+import { audioLevels, measureLoudness, renderContactSheet, renderJob, renderSourceFrame, renderStill, startRender, type Quality } from './render.js';
+import { mediaPath } from './media.js';
+import { clipAt, reframeAt, srcAt } from '../shared/timeline.js';
 import { Hold, store, type EditOutcome, type StepResult } from './store.js';
 import { transcribe, transcriptionEngine } from './transcribe.js';
 
@@ -77,7 +79,7 @@ const AGENT_OPS: Record<string, (d: Project, a: any) => StepResult> = {
   remove_silences: ops.removeSilences, add_captions: ops.addCaptions,
   add_text: ops.addText, update_text: ops.updateText, remove_text: ops.removeText,
   add_zoom: ops.addZoom, update_effect: ops.updateEffect, remove_effect: ops.removeEffect,
-  resolve_note: resolveNote, set_canvas: ops.setCanvas, set_ducking: ops.setDucking, set_denoise: ops.setDenoise, set_caption_style: ops.setCaptionStyle,
+  resolve_note: resolveNote, set_canvas: ops.setCanvas, set_ducking: ops.setDucking, set_denoise: ops.setDenoise, set_caption_style: ops.setCaptionStyle, set_reframe: ops.setReframe, set_reframe_key: ops.setReframeKey, set_speed: ops.setSpeed, add_transition: ops.addTransition,
 };
 
 /* ---------- prompts ---------- */
@@ -227,6 +229,20 @@ export function createMcpServer(session?: McpSession): McpServer {
     return { content: [{ type: 'image' as const, data: png.toString('base64'), mimeType: 'image/png' }, { type: 'text' as const, text: `Frame at ${fmtTime(time)} as it will be exported.` }] };
   });
 
+  reg('get_source_frame', 'See the whole source frame', 'The full, uncropped source frame at a timeline time with the current crop window drawn in yellow and a 10×10 grid. Use it to aim reframing (e.g. landscape footage on a 9:16 canvas): x 0 = crop at the left edge, 1 = right edge.', {
+    time: z.number(),
+  }, READ, async ({ time }) => {
+    const p = store.project;
+    const c = clipAt(p, 'video', time);
+    if (!c) throw new Error(`No video at ${time}s.`);
+    const m = ops.getMedia(p, c.mediaId);
+    if (!m.width || !m.height) throw new Error('This media has no picture.');
+    const png = await renderSourceFrame(p, time, mediaPath(m), m.kind === 'image' ? 0 : srcAt(c, time), m.width, m.height);
+    const pos = reframeAt(p.reframe, time);
+    const fill = Math.abs(m.width / m.height - p.width / p.height) < 0.01;
+    return { content: [{ type: 'image' as const, data: png.toString('base64'), mimeType: 'image/png' }, { type: 'text' as const, text: `Source ${m.width}x${m.height} at ${fmtTime(time)}; crop window at x ${pos.x.toFixed(2)}, y ${pos.y.toFixed(2)}.${fill ? ' The source already matches the canvas shape, so reframing has no effect.' : ''}` }] };
+  });
+
   reg('get_contact_sheet', 'Look at a range', 'A grid of rendered frames spread across a time range, each labelled with its time. One call shows a whole section.', {
     start: z.number().optional(), end: z.number().optional(), count: z.number().int().min(1).max(16).optional().describe('Frames, default 9'),
   }, READ, async ({ start = 0, end, count = 9 }) => {
@@ -303,7 +319,16 @@ export function createMcpServer(session?: McpSession): McpServer {
     clipId: z.string(), start: z.number().min(0).optional(), in: z.number().min(0).optional(), out: z.number().optional(),
     volume: z.number().min(0).max(2).optional(), fadeIn: z.number().min(0).optional(), fadeOut: z.number().min(0).optional(),
     denoise: z.boolean().optional().describe('Background-noise reduction (applied on export)'),
+    videoFadeIn: z.number().min(0).optional().describe('Seconds of fade from black at the start'), videoFadeOut: z.number().min(0).optional().describe('Seconds of fade to black at the end'),
   }, { idempotentHint: true }, ops.updateClip);
+
+  editTool('set_speed', 'Change speed', 'Plays one clip or a time range of the video track faster or slower (0.25–4×, audio keeps its pitch). Everything after it, including captions and zooms, moves to stay in sync.', {
+    speed: z.number().min(0.25).max(4), clipId: z.string().optional(), start: z.number().optional(), end: z.number().optional(),
+  }, {}, ops.setSpeed);
+
+  editTool('add_transition', 'Add a transition', 'Fade through black at a cut between two video clips (at = the cut time), or fade in from black at 0 / fade out at the end.', {
+    at: z.number(), duration: z.number().min(0.1).max(3).optional().describe('Seconds, default 0.6'),
+  }, {}, ops.addTransition);
 
   editTool('set_ducking', 'Duck music under speech', 'Turns the music (audio track) down automatically while people talk, following the transcript, and back up in pauses. Same curve in the preview and the export.', {
     enabled: z.boolean().optional().describe('false turns it off'), amount: z.number().min(-40).max(-1).optional().describe('dB, default -12'),
@@ -376,6 +401,14 @@ export function createMcpServer(session?: McpSession): McpServer {
     preset: z.enum(['karaoke', 'box', 'pop', 'minimal', 'bold']).optional().describe('Look: karaoke (default, spoken word highlighted), box (dark box behind), pop (one big word at a time), minimal (small, no outline), bold (yellow, heavy)'),
     position: z.enum(['bottom', 'middle', 'top']).optional().describe('Default bottom'),
   }, {}, ops.addCaptions);
+
+  editTool('set_reframe', 'Reframe (all keys)', 'Sets where the crop window sits over time when the video does not fill the canvas, e.g. landscape footage on a vertical canvas. Keys ease smoothly; x/y 0 = left/top, 0.5 = center, 1 = right/bottom. An empty list re-centers.', {
+    keys: z.array(z.object({ time: z.number(), x: z.number().min(0).max(1).optional(), y: z.number().min(0).max(1).optional() })).max(500),
+  }, { idempotentHint: true }, ops.setReframe);
+
+  editTool('set_reframe_key', 'Reframe at one time', 'Adds or moves one crop keyframe (or removes it with remove: true).', {
+    time: z.number(), x: z.number().min(0).max(1).optional(), y: z.number().min(0).max(1).optional(), remove: z.boolean().optional(),
+  }, { idempotentHint: true }, ops.setReframeKey);
 
   editTool('set_caption_style', 'Caption style', 'Changes the look and position of all captions (or those in a range) in one step. Check the result with get_frame.', {
     preset: z.enum(['karaoke', 'box', 'pop', 'minimal', 'bold']).optional(), position: z.enum(['bottom', 'middle', 'top']).optional(), color: z.string().optional().describe('Highlight color'),

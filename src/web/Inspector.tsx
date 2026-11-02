@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import { CAPTION_PRESETS, clipAt, clipEnd, fmtTime, positionOf } from '../shared/timeline';
+import { CAPTION_PRESETS, clipAt, clipEnd, clipLen, fmtTime, positionOf, reframeAt } from '../shared/timeline';
 import type { Project } from '../shared/types';
-import { clock } from './clock';
+import { clock, useTime } from './clock';
 import { post } from './api';
 import type { Range, Selection } from './Timeline';
 
@@ -62,6 +62,30 @@ function TextBox({ id, label, value, placeholder, onCommit }: { id: string; labe
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 
+/** Crop position over time, for video that does not match the canvas shape. */
+function Framing({ project, onEdit }: { project: Project; onEdit: Edit }) {
+  const mismatch = project.clips.some(c => {
+    const m = project.media.find(x => x.id === c.mediaId);
+    return c.track === 'video' && m?.width && m.height && Math.abs(m.width / m.height - project.width / project.height) > 0.01;
+  });
+  const t = useTime();
+  if (!mismatch) return null;
+  const pos = reframeAt(project.reframe, t);
+  const keys = project.reframe ?? [];
+  const set = (k: 'x' | 'y') => (v: number) => { const now = reframeAt(project.reframe, clock.get()); onEdit('set_reframe_key', { time: Math.round(clock.get() * 1000) / 1000, x: now.x, y: now.y, [k]: v }); };
+  return (
+    <div className="audio-settings">
+      <h4>Framing</h4>
+      <p className="meta-line">The video is a different shape than the canvas. Move the frame at the playhead; it eases between keyframes.</p>
+      <Slider id="frame-x" label="Left ↔ right" value={pos.x} min={0} max={1} step={0.01} format={v => `${Math.round(v * 100)}%`} onLive={set('x')} />
+      <Slider id="frame-y" label="Up ↕ down" value={pos.y} min={0} max={1} step={0.01} format={v => `${Math.round(v * 100)}%`} onLive={set('y')} />
+      {keys.length > 0 && <ul className="keylist">{keys.map(k => (
+        <li key={k.t}><button className="quiet" onClick={() => { clock.pause(); clock.seek(k.t); }}>{fmtTime(k.t)}</button><span>{Math.round(k.x * 100)}% · {Math.round(k.y * 100)}%</span><button className="quiet danger" aria-label="Remove keyframe" onClick={() => onEdit('set_reframe_key', { time: k.t, remove: true })}>×</button></li>
+      ))}</ul>}
+    </div>
+  );
+}
+
 function AudioSettings({ project, onEdit }: { project: Project; onEdit: Edit }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -99,7 +123,7 @@ export const Inspector = memo(function Inspector({ project, selection, range, on
     if (!c) return null;
     const m = project.media.find(x => x.id === c.mediaId);
     const up = (k: string) => (v: number) => onEdit('update_clip', { clipId: c.id, [k]: v });
-    const len = c.out - c.in;
+    const len = clipLen(c);
     return (
       <div className="inspector">
         <h3><span className={`chip ${c.track}`}>{c.track}</span><span className="name">{m?.name}</span></h3>
@@ -117,6 +141,15 @@ export const Inspector = memo(function Inspector({ project, selection, range, on
           <div className="grid2">
             <Slider id="clip-fin" label="Fade in" value={c.fadeIn ?? 0} min={0} max={Math.min(3, len / 2)} step={0.1} format={secs} onLive={up('fadeIn')} />
             <Slider id="clip-fout" label="Fade out" value={c.fadeOut ?? 0} min={0} max={Math.min(3, len / 2)} step={0.1} format={secs} onLive={up('fadeOut')} />
+          </div>
+        </>}
+        {c.track === 'video' && <>
+          <div className="field"><span>Speed<b>{c.speed ?? 1}×</b></span>
+            <div className="row">{[0.5, 0.75, 1, 1.25, 1.5, 2].map(v => <button key={v} className={(c.speed ?? 1) === v ? 'on' : ''} onClick={() => onEdit('set_speed', { clipId: c.id, speed: v })}>{v}×</button>)}</div>
+          </div>
+          <div className="grid2">
+            <Slider id="clip-vfin" label="Fade from black" value={c.videoFadeIn ?? 0} min={0} max={Math.min(3, len / 2)} step={0.1} format={secs} onLive={up('videoFadeIn')} />
+            <Slider id="clip-vfout" label="Fade to black" value={c.videoFadeOut ?? 0} min={0} max={Math.min(3, len / 2)} step={0.1} format={secs} onLive={up('videoFadeOut')} />
           </div>
         </>}
         {m?.hasAudio && <label className="check" htmlFor="clip-denoise"><input id="clip-denoise" type="checkbox" checked={!!c.denoise} onChange={e => onEdit('update_clip', { clipId: c.id, denoise: e.target.checked })} /> Reduce background noise <span className="meta-line">(on export)</span></label>}
@@ -234,6 +267,7 @@ export const Inspector = memo(function Inspector({ project, selection, range, on
       <div className="row">
         {presets.map(([label, w, h]) => <button key={label} className={project.width === w && project.height === h ? 'on' : ''} onClick={() => onEdit('set_canvas', { width: w, height: h })}>{label}</button>)}
       </div>
+      <Framing project={project} onEdit={onEdit} />
       <AudioSettings project={project} onEdit={onEdit} />
       <p className="meta-line">Click anything on the timeline to edit it. Drag on the ruler to select a range, then cut it, change its volume, or leave a note for the agent.</p>
       <dl className="keys">

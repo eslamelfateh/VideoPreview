@@ -1,8 +1,22 @@
-import type { CaptionPreset, Clip, Effect, Project, ProjectAudio, TextItem, TextPosition, Word } from './types.js';
+import type { CaptionPreset, Clip, Effect, Project, ProjectAudio, ReframeKey, TextItem, TextPosition, Word } from './types.js';
 
 export const round = (n: number, d = 3) => Math.round(n * 10 ** d) / 10 ** d;
-export const clipLen = (c: Clip) => c.out - c.in;
+export const speedOf = (c: Clip) => c.speed ?? 1;
+/** Length on the timeline (source length divided by speed). */
+export const clipLen = (c: Clip) => (c.out - c.in) / speedOf(c);
 export const clipEnd = (c: Clip) => c.start + clipLen(c);
+/** Source time shown at timeline time t, and the reverse. */
+export const srcAt = (c: Clip, t: number) => c.in + (t - c.start) * speedOf(c);
+export const tlAt = (c: Clip, src: number) => c.start + (src - c.in) / speedOf(c);
+/** How dark the picture is at t because of a clip's fade from/to black (0 = none, 1 = black). */
+export function dipAt(c: Clip | undefined, t: number): number {
+  if (!c) return 0;
+  const into = t - c.start, left = clipEnd(c) - t;
+  let d = 0;
+  if (c.videoFadeIn && into < c.videoFadeIn) d = Math.max(d, 1 - into / c.videoFadeIn);
+  if (c.videoFadeOut && left < c.videoFadeOut) d = Math.max(d, 1 - left / c.videoFadeOut);
+  return Math.max(0, Math.min(1, d));
+}
 
 export function duration(p: Project): number {
   let d = 0;
@@ -33,7 +47,7 @@ export function timelineWords(p: Project): Word[] {
       const mid = (w.start + w.end) / 2;
       if (mid < c.in || mid >= c.out) continue;
       const s = Math.max(w.start, c.in), e = Math.min(w.end, c.out);
-      out.push({ text: w.text, start: round(c.start + s - c.in), end: round(c.start + e - c.in) });
+      out.push({ text: w.text, start: round(tlAt(c, s)), end: round(tlAt(c, e)) });
     }
   }
   return out.sort((a, b) => a.start - b.start);
@@ -143,3 +157,18 @@ export const presetOf = (t: TextItem) => CAPTION_PRESETS[t.preset ?? 'karaoke'] 
 export const positionOf = (t: TextItem): TextPosition => t.position ?? (t.style === 'title' ? 'top' : 'bottom');
 /** Distance from the top (for top) or bottom (for bottom), as a fraction of the height. */
 export const POSITION_MARGIN = { bottom: 0.2, top: 0.14, middle: 0 } as const;
+
+/** Crop window position at t: holds before the first and after the last key, eases between keys. */
+export function reframeAt(keys: ReframeKey[] | undefined, t: number): { x: number; y: number } {
+  if (!keys?.length) return { x: 0.5, y: 0.5 };
+  if (t <= keys[0].t) return { x: keys[0].x, y: keys[0].y };
+  for (let i = 1; i < keys.length; i++) {
+    const a = keys[i - 1], b = keys[i];
+    if (t <= b.t) {
+      const u = (t - a.t) / Math.max(1e-6, b.t - a.t), s = u * u * (3 - 2 * u);
+      return { x: a.x + (b.x - a.x) * s, y: a.y + (b.y - a.y) * s };
+    }
+  }
+  const z = keys[keys.length - 1];
+  return { x: z.x, y: z.y };
+}

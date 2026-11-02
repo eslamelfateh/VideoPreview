@@ -109,6 +109,78 @@ try {
   check('styles are stored on captions', pop.preset === 'bold' && pop.position === 'top');
   await call('set_caption_style', { preset: 'karaoke', position: 'bottom' });
 
+  /* speed and transitions */
+  {
+    await api('/reset', {});
+    await upload(video);
+    const sv = (await api('/state')).project;
+    const mid = sv.media[0].id;
+    await call('transcribe', { mediaId: mid, language: 'ar' });
+    await call('add_captions', { wordsPerCaption: 2 });
+    const before = await api('/state');
+    const D0 = before.project.clips[0].out - before.project.clips[0].in;
+    const capAfter = before.project.texts.find(t => t.start >= 7);
+    const capInside = before.project.texts.find(t => t.start >= 2.5 && t.end <= 5.5);
+    const sp = await call('set_speed', { start: 2, end: 6, speed: 2 });
+    const after = await api('/state');
+    const D1 = after.project.clips.reduce((m, c) => Math.max(m, c.start + (c.out - c.in) / (c.speed ?? 1)), 0);
+    check('set_speed 2× over 4 s makes the video 2 s shorter', Math.abs((D0 - D1) - 2) < 0.02, `${D0.toFixed(2)} → ${D1.toFixed(2)} s (${sp.text.split('\n')[0]})`);
+    const ca = after.project.texts.find(t => t.id === capAfter.id), ci = after.project.texts.find(t => t.id === capInside.id);
+    check('captions after the change move 2 s earlier', Math.abs((capAfter.start - ca.start) - 2) < 0.02);
+    check('captions inside the change are compressed 2×', Math.abs((ci.start - 2) - (capInside.start - 2) / 2) < 0.02 && Math.abs((ci.end - ci.start) - (capInside.end - capInside.start) / 2) < 0.02);
+    const ex4 = await exportDraft();
+    const dur = Number(spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', exportFile(ex4.url)], { encoding: 'utf8' }).stdout);
+    const adur = Number(spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=duration', '-of', 'csv=p=0', exportFile(ex4.url)], { encoding: 'utf8' }).stdout);
+    check('export length matches the faster timeline (video and audio)', Math.abs(dur - D1) < 0.1 && Math.abs(adur - D1) < 0.1, `video ${dur.toFixed(2)} s, audio ${adur.toFixed(2)} s, timeline ${D1.toFixed(2)} s`);
+    // A sine tone at 300 Hz would shift to 600 Hz without pitch correction; speech energy should stay where it was.
+    const vclip = after.project.clips.find(c => c.track === 'video' && c.start <= 8 && c.start + (c.out - c.in) / (c.speed ?? 1) > 9);
+    const cutAt = 8;
+    await call('split_clip', { clipId: vclip.id, at: cutAt });
+    const tr2 = await call('add_transition', { at: cutAt, duration: 1 });
+    check('add_transition at a cut', tr2.structuredContent.status === 'applied', tr2.text.split('\n')[0]);
+    const luma = (t) => { const f = path.join(outDir, `dip-${t}.png`); const r = call('get_frame', { time: t, width: 270 }); return r; };
+    const atCut = await luma(cutAt), before1 = await luma(cutAt - 0.9);
+    const yavg = (r) => { const img = r.content.find(c => c.type === 'image'); const f = path.join(outDir, 'y.png'); fs.writeFileSync(f, Buffer.from(img.data, 'base64')); return Number(/YAVG=([\d.]+)/.exec(spawnSync('ffmpeg', ['-hide_banner', '-i', f, '-vf', 'signalstats,metadata=print', '-f', 'null', '-'], { encoding: 'utf8' }).stderr)?.[1]); };
+    const yCut = yavg(atCut), yBefore = yavg(before1);
+    check('the frame at the cut is dark, the frame before is not', yCut < 25 && yBefore > 60, `brightness ${yCut} at the cut, ${yBefore} before`);
+    const ex5 = await exportDraft();
+    const yExp = Number(/YAVG=([\d.]+)/.exec(spawnSync('ffmpeg', ['-hide_banner', '-ss', String(cutAt), '-i', exportFile(ex5.url), '-frames:v', '1', '-vf', 'signalstats,metadata=print', '-f', 'null', '-'], { encoding: 'utf8' }).stderr)?.[1]);
+    check('the export dips to black at the cut', yExp < 25, `brightness ${yExp}`);
+  }
+
+  /* reframing landscape footage onto the vertical canvas */
+  const landscape = process.env.LANDSCAPE;
+  if (landscape) {
+    await api('/reset', {});
+    await call('set_canvas', { width: 1080, height: 1920 });
+    const r1 = await fetch(`${BASE}/api/media`, { method: 'POST', body: (() => { const f = new FormData(); f.append('files', new Blob([fs.readFileSync(landscape)]), 'landscape.mp4'); return f; })() });
+    if (!r1.ok) throw new Error(await r1.text());
+    await call('set_canvas', { width: 1080, height: 1920 });
+    const src = await call('get_source_frame', { time: 2 });
+    const simg = src.content.find(c => c.type === 'image');
+    if (simg) fs.writeFileSync(path.join(outDir, 'source-frame.png'), Buffer.from(simg.data, 'base64'));
+    check('get_source_frame shows the whole frame with the crop window', !!simg && /crop window at x 0.50/.test(src.text), src.text.split(';')[0]);
+    const rk = await call('set_reframe', { keys: [{ time: 0, x: 0 }, { time: 4, x: 1 }] });
+    check('set_reframe', rk.structuredContent.status === 'applied');
+    // The export must show exactly the left edge at 0 s and the right edge at 4 s+ of the source.
+    const ex3 = await exportDraft();
+    const out = exportFile(ex3.url);
+    const psnr = (t, x) => {
+      const cropX = x === 0 ? '0' : 'iw-ow';
+      const r = spawnSync('ffmpeg', ['-hide_banner', '-ss', String(t), '-i', out, '-ss', String(t), '-i', landscape, '-frames:v', '1', '-filter_complex',
+        `[1:v]scale=-2:1920,crop=1080:1920:${cropX}:0,format=yuv420p[ref];[0:v]format=yuv420p[o];[o][ref]psnr`, '-f', 'null', '-'], { encoding: 'utf8' }).stderr;
+      return Number(/average:([\d.]+|inf)/.exec(r)?.[1].replace('inf', '99'));
+    };
+    // Draft exports are lossy, so compare against the wrong side rather than an absolute score.
+    const pLeft = psnr(0, 0), pLeftWrong = psnr(0, 1), pRight = psnr(5, 1), pWrong = psnr(5, 0);
+    check('export crops the left edge at the start', pLeft > 25 && pLeft > pLeftWrong + 8, `PSNR ${pLeft.toFixed(1)} dB vs ${pLeftWrong.toFixed(1)} for the right edge`);
+    check('export pans to the right edge by 4 s', pRight > 25 && pRight > pWrong + 8, `PSNR ${pRight.toFixed(1)} dB vs ${pWrong.toFixed(1)} for the left edge`);
+    const mid = await call('get_frame', { time: 2 });
+    check('frames mid-pan render', mid.content.some(c => c.type === 'image'));
+    const undoKey = await call('set_reframe_key', { time: 4, remove: true });
+    check('remove one reframe key', undoKey.structuredContent.status === 'applied' && (await api('/state')).project.reframe.length === 1);
+  }
+
   /* project settings are undoable */
   await call('set_canvas', { width: 1920, height: 1080 });
   const before = (await api('/state')).project.width;

@@ -27,6 +27,11 @@ export interface Clip {
   fadeIn?: number; // seconds
   fadeOut?: number; // seconds
   denoise?: boolean; // background-noise reduction on export
+  speed?: number; // 0.25..4, default 1 (audio keeps its pitch)
+  videoFadeIn?: number; // seconds of fade from black
+  videoFadeOut?: number; // seconds of fade to black
+  /** Internal, for single-frame renders: how dark this frame is from a fade (0..1). */
+  stillDim?: number;
 }
 
 export interface Word {
@@ -104,7 +109,11 @@ export interface Project {
   transcripts: Transcript[];
   markers: Marker[];
   audio?: ProjectAudio;
+  /** Where the crop window sits when the video does not fill the canvas (0 = left/top, 1 = right/bottom), over time. */
+  reframe?: ReframeKey[];
 }
+
+export interface ReframeKey { t: number; x: number; y: number }
 
 export const COLLECTIONS = ['media', 'clips', 'texts', 'effects', 'transcripts', 'markers'] as const;
 /** 'settings' is the project's own fields (canvas, fps, audio), tracked like an entity so undo covers them. */

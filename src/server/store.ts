@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { applyChanges, clone, conflicts, diff } from '../shared/diff.js';
-import { clipEnd, DUCK_GAP, fmtTime, speechRegions } from '../shared/timeline.js';
+import { clipEnd, DUCK_GAP, fmtTime, speechRegions, srcAt } from '../shared/timeline.js';
 import type { Change, Control, MediaAssets, Project, Question, RenderState, ServerState, Step } from '../shared/types.js';
 
 export const DATA_DIR = path.resolve(process.env.LIVECUT_DATA ?? 'data');
@@ -282,16 +282,16 @@ function fragments(p: Project, s: number, e: number): string {
     const a = Math.max(s, c.start), b = Math.min(e, clipEnd(c));
     const fadeIn = c.fadeIn && c.start + c.fadeIn > s ? c.fadeIn : 0;
     const fadeOut = c.fadeOut && clipEnd(c) - c.fadeOut < e ? c.fadeOut : 0;
-    return { track: c.track, media: c.mediaId, a, b, src: c.in + (a - c.start), vol: c.volume, fadeIn, fadeOut };
+    return { track: c.track, media: c.mediaId, a, b, src: srcAt(c, a), vol: c.volume, fadeIn, fadeOut, speed: c.speed ?? 1, dip: [c.videoFadeIn ?? 0, c.videoFadeOut ?? 0] };
   }).sort((x, y) => (x.track + x.a).localeCompare(y.track + y.a) || x.a - y.a);
   const merged: typeof parts = [];
   for (const f of parts) {
     const m = merged[merged.length - 1];
-    if (m && m.track === f.track && m.media === f.media && Math.abs(m.b - f.a) < 1e-3 && Math.abs(m.src + (m.b - m.a) - f.src) < 1e-3
+    if (m && m.track === f.track && m.media === f.media && m.speed === f.speed && Math.abs(m.b - f.a) < 1e-3 && Math.abs(m.src + (m.b - m.a) * m.speed - f.src) < 1e-3 && !m.dip[1] && !f.dip[0]
         && m.vol === f.vol && !m.fadeOut && !f.fadeIn) { m.b = f.b; m.fadeOut = f.fadeOut; continue; }
     merged.push({ ...f });
   }
-  return JSON.stringify(merged.map(f => [f.track, f.media, r(f.a - s), r(f.b - s), r(f.src), f.vol, r(f.fadeIn), r(f.fadeOut)]));
+  return JSON.stringify(merged.map(f => [f.track, f.media, r(f.a - s), r(f.b - s), r(f.src), f.vol, r(f.fadeIn), r(f.fadeOut), f.speed, f.dip]));
 }
 
 /** The first open "don't touch" note that a change would alter, if any. */

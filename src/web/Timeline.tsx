@@ -113,7 +113,7 @@ interface Props {
 }
 
 type Drag = { kind: Kind; id: string; mode: 'move' | 'left' | 'right'; x0: number; d: number; moved: boolean };
-type Box = { start: number; end: number; in?: number; out?: number };
+type Box = { start: number; end: number; in?: number; out?: number; speed?: number };
 
 const LANE_H = 44, CLIP_H = 32;
 
@@ -145,7 +145,7 @@ export function Timeline({ project, assets, selection, onSelect, range, onRange,
   /* geometry of every item, with in-flight drags applied */
   const boxOf = (kind: Kind, id: string): Box | undefined => {
     if (pending[id]) return pending[id];
-    if (kind === 'clip') { const c = project.clips.find(c => c.id === id); return c && { start: c.start, end: clipEnd(c), in: c.in, out: c.out }; }
+    if (kind === 'clip') { const c = project.clips.find(c => c.id === id); return c && { start: c.start, end: clipEnd(c), in: c.in, out: c.out, speed: c.speed ?? 1 }; }
     const list: any[] = kind === 'text' ? project.texts : kind === 'effect' ? project.effects : project.markers;
     const it = list.find(i => i.id === id);
     return it && { start: it.start, end: it.end };
@@ -171,23 +171,24 @@ export function Timeline({ project, assets, selection, onSelect, range, onRange,
       const s1 = snap(b.start + d), s2 = snap(b.end + d);
       if (s1 !== null && (s2 === null || Math.abs(s1) <= Math.abs(s2))) d += s1; else if (s2 !== null) d += s2;
       d = Math.max(d, -b.start);
-      return { start: b.start + d, end: b.end + d, in: b.in, out: b.out };
+      return { start: b.start + d, end: b.end + d, in: b.in, out: b.out, speed: b.speed };
     }
     if (dr.mode === 'left') {
       const s = snap(b.start + d); if (s !== null) d += s;
       d = Math.min(d, b.end - b.start - 0.1);
       d = Math.max(d, -b.start);
-      if (b.in !== undefined) d = Math.max(d, -b.in);
-      return { start: b.start + d, end: b.end, in: b.in !== undefined ? b.in + d : undefined, out: b.out };
+      const sp = b.speed ?? 1;
+      if (b.in !== undefined) d = Math.max(d, -b.in / sp);
+      return { start: b.start + d, end: b.end, in: b.in !== undefined ? b.in + d * sp : undefined, out: b.out, speed: b.speed };
     }
     const s = snap(b.end + d); if (s !== null) d += s;
     d = Math.max(d, b.start - b.end + 0.1);
     if (b.out !== undefined && dr.kind === 'clip') {
       const c = project.clips.find(c => c.id === dr.id)!;
       const m = media.get(c.mediaId);
-      if (m && m.kind !== 'image') d = Math.min(d, m.duration - b.out);
+      if (m && m.kind !== 'image') d = Math.min(d, (m.duration - b.out) / (b.speed ?? 1));
     }
-    return { start: b.start, end: b.end + d, in: b.in, out: b.out !== undefined ? b.out + d : undefined };
+    return { start: b.start, end: b.end + d, in: b.in, out: b.out !== undefined ? b.out + d * (b.speed ?? 1) : undefined, speed: b.speed };
   };
   const live = drag ? applyDrag(drag) : undefined;
   const geo = (kind: Kind, id: string): Box | undefined => (drag && drag.id === id && live ? live : boxOf(kind, id));
@@ -269,7 +270,7 @@ export function Timeline({ project, assets, selection, onSelect, range, onRange,
       const m = media.get(c.mediaId);
       return (
         <div key={c.id} className={cls('clip', c.id, track === 'video' ? 'v' : 'a')} style={style(c)} {...handlers('clip', c.id)} title={`${m?.name ?? ''} · ${fmtTime(c.start)}–${fmtTime(c.end)} · volume ${Math.round(c.volume * 100)}%`}>
-          <span className="label">{m?.name}{c.volume !== 1 && <b className="vol">{Math.round(c.volume * 100)}%</b>}</span>
+          <span className="label">{m?.name}{(c.speed ?? 1) !== 1 && <b className="vol">{c.speed}×</b>}{c.volume !== 1 && <b className="vol">{Math.round(c.volume * 100)}%</b>}</span>
         </div>
       );
     })}
