@@ -93,7 +93,7 @@ console.log(`playback: ${play.fps.toFixed(0)} fps, p95 frame ${play.p95.toFixed(
   await page.click('button.play');
   const mid = await measure();
   await page.click('button.play');
-  console.log(`playback mid-video: ${mid.fps.toFixed(0)} fps, p95 ${mid.p95.toFixed(1)}ms (proxy pieces ready: ${px?.ready ?? 0}/${px?.total ?? '?'})`);
+  console.log(`playback mid-video: ${mid.fps.toFixed(0)} fps, p95 ${mid.p95.toFixed(1)}ms (preview proxy ${px ? 'ready' : 'not ready yet'})`);
 }
 
 // Zoom the timeline in and scrub.

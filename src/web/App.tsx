@@ -162,6 +162,22 @@ export function App() {
     if (!(lists[selection.kind] as { id: string }[]).some(x => x.id === selection.id)) setSelection(null);
   }, [project, selection]);
 
+  // Tell the server when the preview plays, so background jobs (proxies, thumbnails) pause meanwhile.
+  useEffect(() => {
+    if (REVIEW) return;
+    let was = false, beat = 0;
+    const send = (playing: boolean) => post('/playback', { playing }).catch(() => {});
+    const unsub = clock.subscribe(() => {
+      const now = clock.isPlaying();
+      if (now === was) return;
+      was = now;
+      send(now);
+      clearInterval(beat);
+      if (now) beat = window.setInterval(() => send(true), 20_000);
+    });
+    return () => { unsub(); clearInterval(beat); if (was) send(false); };
+  }, []);
+
   useEffect(() => { if (error) { const t = setTimeout(() => setError(''), 6000); return () => clearTimeout(t); } }, [error]);
 
   const edit = useCallback(async (op: string, args: Record<string, unknown>) => {

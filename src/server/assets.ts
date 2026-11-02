@@ -1,12 +1,9 @@
-import { execFile, spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { promisify } from 'node:util';
 import type { Media } from '../shared/types.js';
 import { FFMPEG, mediaPath } from './media.js';
 import { MEDIA_DIR, store } from './store.js';
-
-const exec = promisify(execFile);
 
 /**
  * Background work (proxies, thumbnails, waveforms) runs at the lowest CPU priority, so a
@@ -14,7 +11,39 @@ const exec = promisify(execFile);
  */
 const NICE = process.platform !== 'win32' && spawnSync('nice', ['-n', '19', 'true']).status === 0;
 const low = (cmd: string, args: string[]): [string, string[]] => (NICE ? ['nice', ['-n', '19', cmd, ...args]] : [cmd, args]);
-const run = (cmd: string, args: string[], opts: object = {}) => exec(...low(cmd, args), opts);
+/**
+ * While someone is playing the preview, background jobs are paused (SIGSTOP) and resumed
+ * when playback stops: on small machines a running ffmpeg costs the preview frames,
+ * even at low priority. If the editor goes away mid-play, jobs resume after a minute.
+ */
+const jobs = new Set<ChildProcess>();
+const CAN_PAUSE = process.platform !== 'win32';
+let held = false, holdTimer: NodeJS.Timeout | null = null;
+function track(p: ChildProcess) {
+  jobs.add(p);
+  p.on('exit', () => jobs.delete(p));
+  if (held && CAN_PAUSE) p.kill('SIGSTOP');
+  return p;
+}
+export function holdBackgroundJobs(playing: boolean) {
+  if (!CAN_PAUSE) return;
+  if (holdTimer) clearTimeout(holdTimer);
+  if (playing) {
+    if (!held) for (const j of jobs) j.kill('SIGSTOP');
+    held = true;
+    holdTimer = setTimeout(() => holdBackgroundJobs(false), 60_000);
+  } else {
+    if (held) for (const j of jobs) j.kill('SIGCONT');
+    held = false;
+  }
+}
+const run = (cmd: string, args: string[], _opts: object = {}) => new Promise<void>((resolve, reject) => {
+  const p = track(spawn(...low(cmd, args), { stdio: ['ignore', 'ignore', 'pipe'] }));
+  let err = '';
+  p.stderr!.on('data', (d: Buffer) => { err += d.toString(); if (err.length > 8000) err = err.slice(-4000); });
+  p.on('error', reject);
+  p.on('close', code => (code === 0 ? resolve() : reject(new Error(err.trim().split('\n').pop() || `ffmpeg exited with ${code}`))));
+});
 const PEAKS_PER_SECOND = 50;
 const THUMB_H = 64;
 
@@ -22,10 +51,10 @@ const THUMB_H = 64;
 function peaks(m: Media, out: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const rate = 8000, per = rate / PEAKS_PER_SECOND;
-    const p = spawn(...low(FFMPEG, ['-v', 'error', '-i', mediaPath(m), '-vn', '-ac', '1', '-ar', String(rate), '-f', 's16le', 'pipe:1']));
+    const p = track(spawn(...low(FFMPEG, ['-v', 'error', '-i', mediaPath(m), '-vn', '-ac', '1', '-ar', String(rate), '-f', 's16le', 'pipe:1'])));
     const result: number[] = [];
     let max = 0, n = 0, carry: Buffer = Buffer.alloc(0);
-    p.stdout.on('data', (b: Buffer) => {
+    p.stdout!.on('data', (b: Buffer) => {
       const buf = carry.length ? Buffer.concat([carry, b]) : b;
       const usable = buf.length - (buf.length % 2);
       for (let i = 0; i < usable; i += 2) {

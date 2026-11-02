@@ -12,7 +12,7 @@ import { getOAuthProtectedResourceMetadataUrl, mcpAuthRouter } from '@modelconte
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { trackEnd } from '../shared/timeline.js';
-import { analyze } from './assets.js';
+import { analyze, holdBackgroundJobs } from './assets.js';
 import { createMcpServer, type McpSession } from './mcp.js';
 import { LiveCutOAuth } from './oauth.js';
 import { USER_OPS } from './ops.js';
@@ -179,6 +179,8 @@ api.post('/edit', handle(async req => {
   if (!fn) throw new Error(`Unknown edit: ${op}`);
   return { summary: await store.edit(String(op), args ?? {}, d => fn(d, args ?? {}), 'user') };
 }));
+// The editor reports play/pause (and a heartbeat while playing) so background jobs give it the CPU.
+api.post('/playback', handle(req => { holdBackgroundJobs(!!req.body?.playing); }));
 api.post('/export', handle(req => { startRender(req.body?.quality === 'draft' ? 'draft' : 'final').catch(() => { /* state carries the error */ }); return { started: true }; }));
 api.post('/audio/normalize', handle(async req => {
   const measured = Math.round((await measureLoudness(store.project)) * 10) / 10;
