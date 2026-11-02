@@ -1,4 +1,4 @@
-import type { CaptionPreset, Clip, Effect, Project, ProjectAudio, ReframeKey, TextItem, TextPosition, Word } from './types.js';
+import type { Box, CaptionPreset, Clip, Effect, Project, ProjectAudio, ReframeKey, TextItem, TextPosition, Word } from './types.js';
 
 export const round = (n: number, d = 3) => Math.round(n * 10 ** d) / 10 ** d;
 export const speedOf = (c: Clip) => c.speed ?? 1;
@@ -80,6 +80,14 @@ export function zoomAt(effects: Effect[], t: number): { scale: number; x: number
 export function textsAt(texts: TextItem[], t: number): TextItem[] {
   return texts.filter(x => t >= x.start && t < x.end);
 }
+
+export const LAYOUTS: Record<string, Box> = {
+  full: { x: 0, y: 0, w: 1, h: 1 },
+  'top-half': { x: 0, y: 0, w: 1, h: 0.5 }, 'bottom-half': { x: 0, y: 0.5, w: 1, h: 0.5 },
+  'pip-top-right': { x: 0.6, y: 0.06, w: 0.35, h: 0.25 }, 'pip-top-left': { x: 0.05, y: 0.06, w: 0.35, h: 0.25 },
+  'pip-bottom-right': { x: 0.6, y: 0.62, w: 0.35, h: 0.25 }, 'pip-bottom-left': { x: 0.05, y: 0.62, w: 0.35, h: 0.25 },
+};
+export const layoutOf = (c: Clip): Box => c.layout ?? LAYOUTS.full;
 
 export function fmtTime(t: number): string {
   const m = Math.floor(t / 60), s = t - m * 60;

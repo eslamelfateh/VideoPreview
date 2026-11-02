@@ -1,5 +1,5 @@
-import { clipEnd, clipLen, duration, fmtTime, round, speedOf, srcAt, timelineWords, tlAt, trackEnd } from '../shared/timeline.js';
-import type { CaptionPreset, Clip, Marker, Media, Project, TextItem, TextPosition, Track, Word, ZoomEffect } from '../shared/types.js';
+import { clipEnd, clipLen, duration, fmtTime, LAYOUTS, round, speedOf, srcAt, timelineWords, tlAt, trackEnd } from '../shared/timeline.js';
+import type { Box, CaptionPreset, Clip, Marker, Media, Project, TextItem, TextPosition, Track, Word, ZoomEffect } from '../shared/types.js';
 import { CAPTION_PRESETS } from '../shared/timeline.js';
 import { newId, type StepResult } from './store.js';
 
@@ -46,23 +46,42 @@ function splitTrackAt(d: Project, track: Track, t: number): boolean {
 
 /* ---------- clips ---------- */
 
-export function addClip(d: Project, a: { mediaId: string; track?: Track; start?: number; in?: number; out?: number; volume?: number }): StepResult {
+/** A layout preset name or an explicit box (fractions of the canvas). */
+function parseLayout(v: unknown): Box | undefined {
+  if (v === undefined || v === null || v === '') return undefined;
+  if (typeof v === 'string') { const b = LAYOUTS[v]; if (!b) throw new Error(`Unknown layout ${v}. Use: ${Object.keys(LAYOUTS).join(', ')}, or { x, y, w, h }.`); return { ...b }; }
+  const b = v as Box;
+  const c = (k: keyof Box) => Math.max(0, Math.min(1, num(b[k], `layout.${k}`)));
+  const out = { x: c('x'), y: c('y'), w: c('w'), h: c('h') };
+  if (out.w < 0.05 || out.h < 0.05) throw new Error('The layout box is too small.');
+  return out;
+}
+
+export function addClip(d: Project, a: { mediaId: string; track?: Track; start?: number; in?: number; out?: number; volume?: number; end?: number; layout?: unknown }): StepResult {
   const m = getMedia(d, a.mediaId);
   const track = a.track ?? (m.kind === 'audio' ? 'audio' : 'video');
-  if (track === 'video' && m.kind === 'audio') throw new Error('Audio files go on the audio track.');
+  if (track !== 'audio' && m.kind === 'audio') throw new Error('Audio files go on the audio track.');
+  const start = t3(opt(a.start, 'start') ?? trackEnd(d, track));
+  const inP = t3(opt(a.in, 'in') ?? 0);
+  const end = opt(a.end, 'end');
+  const out = opt(a.out, 'out') ?? (end !== undefined ? inP + (end - start) : m.kind === 'image' ? 5 : m.duration);
   const c: Clip = {
-    id: newId('clip'), track, mediaId: m.id, start: t3(opt(a.start, 'start') ?? trackEnd(d, track)),
-    in: t3(opt(a.in, 'in') ?? 0), out: t3(opt(a.out, 'out') ?? (m.kind === 'image' ? 5 : m.duration)), volume: opt(a.volume, 'volume') ?? 1,
+    id: newId('clip'), track, mediaId: m.id, start, in: inP, out: t3(out),
+    // B-roll is muted unless asked otherwise, so it does not talk over the speaker.
+    volume: opt(a.volume, 'volume') ?? (track === 'overlay' ? 0 : 1),
+    ...(track === 'overlay' ? { layout: parseLayout(a.layout) ?? { ...LAYOUTS.full } } : {}),
   };
   checkClip(c, m);
   d.clips.push(c);
-  return { summary: `Added ${m.name} to ${track} at ${fmtTime(c.start)} (${t3(clipLen(c))}s)`, at: c.start, detail: `clipId: ${c.id}` };
+  return { summary: `Added ${m.name} ${track === 'overlay' ? 'as B-roll' : `to ${track}`} at ${fmtTime(c.start)} (${t3(clipLen(c))}s)`, at: c.start, detail: `clipId: ${c.id}` };
 }
 
-export function updateClip(d: Project, a: { clipId: string; start?: number; in?: number; out?: number; volume?: number; fadeIn?: number; fadeOut?: number; denoise?: boolean; videoFadeIn?: number; videoFadeOut?: number }): StepResult {
+export function updateClip(d: Project, a: { clipId: string; start?: number; in?: number; out?: number; volume?: number; fadeIn?: number; fadeOut?: number; denoise?: boolean; videoFadeIn?: number; videoFadeOut?: number; layout?: unknown }): StepResult {
   const c = getClip(d, a.clipId);
   const m = getMedia(d, c.mediaId);
   const parts: string[] = [];
+  const layout = parseLayout(a.layout);
+  if (layout) { if (c.track !== 'overlay') throw new Error('Only B-roll (overlay) clips have a layout.'); c.layout = layout; parts.push('layout'); }
   if (typeof a.denoise === 'boolean') { c.denoise = a.denoise || undefined; parts.push(`noise reduction ${a.denoise ? 'on' : 'off'}`); }
   for (const k of ['start', 'in', 'out', 'volume', 'fadeIn', 'fadeOut', 'videoFadeIn', 'videoFadeOut'] as const) {
     const v = opt(a[k], k);
@@ -99,7 +118,7 @@ export function cutRange(d: Project, a: { start: number; end: number }): StepRes
   const s = t3(num(a.start, 'start')), e = t3(num(a.end, 'end'));
   if (e - s < 0.05) throw new Error('end must be after start.');
   const len = e - s;
-  for (const tr of ['video', 'audio'] as const) { splitTrackAt(d, tr, s); splitTrackAt(d, tr, e); }
+  for (const tr of ['video', 'audio', 'overlay'] as const) { splitTrackAt(d, tr, s); splitTrackAt(d, tr, e); }
   d.clips = d.clips.filter(c => !(c.start >= s - 1e-6 && clipEnd(c) <= e + 1e-6));
   for (const c of d.clips) if (c.start >= e - 1e-6) c.start = t3(c.start - len);
   const shift = <T extends { start: number; end: number }>(items: T[]) => items
@@ -123,7 +142,7 @@ export function setVolume(d: Project, a: { volume: number; clipId?: string; star
   const pct = `${Math.round(v * 100)}%`;
   if (a.clipId) { const c = getClip(d, a.clipId); c.volume = v; return { summary: `Volume ${pct} on one clip`, at: c.start }; }
   const s = opt(a.start, 'start') ?? 0, e = opt(a.end, 'end') ?? duration(d);
-  const tracks: Track[] = a.track ? [a.track] : ['video', 'audio'];
+  const tracks: Track[] = a.track ? [a.track] : ['video', 'audio', 'overlay'];
   for (const tr of tracks) { splitTrackAt(d, tr, s); splitTrackAt(d, tr, e); }
   const hit = d.clips.filter(c => tracks.includes(c.track) && c.start >= s - 1e-6 && clipEnd(c) <= e + 1e-6);
   if (!hit.length) throw new Error('No clips in that range.');
@@ -163,7 +182,7 @@ export function removeSilences(d: Project, a: { minPause?: number; padding?: num
     });
   }
   d.clips = d.clips.filter(c => c.track !== 'video').concat(next);
-  // Captions, zooms and notes move with the speech they belong to.
+  // Captions, zooms, notes and B-roll move with the speech they belong to.
   const map = (t: number) => {
     for (const p of pieces) if (t >= p.oldS && t <= p.oldE) return p.newS + (t - p.oldS);
     const after = pieces.find(p => p.oldS > t);
@@ -175,6 +194,7 @@ export function removeSilences(d: Project, a: { minPause?: number; padding?: num
   d.texts = d.texts.map(t => ({ ...move(t), ...(t.words ? { words: t.words.map(move) } : {}) })).filter(t => t.end - t.start > 0.05);
   d.effects = d.effects.map(move).filter(e => e.end - e.start > 0.05);
   if (d.reframe) d.reframe = d.reframe.map(k => ({ ...k, t: t3(map(k.t)) }));
+  for (const c of d.clips) if (c.track === 'overlay') c.start = t3(map(c.start));
   d.markers = d.markers.map(m => {
     if (m.kind !== 'dont') return move(m);
     const s = map(m.start);
@@ -351,6 +371,8 @@ export function setCanvas(d: Project, a: { width: number; height: number; fps?: 
 
 /** Moves texts, zooms, notes and framing keys through a piecewise time mapping (old timeline → new). */
 function remapTimes(d: Project, map: (t: number) => number) {
+  // B-roll stays on the moment it covers; its length is kept.
+  for (const c of d.clips) if (c.track === 'overlay') c.start = t3(map(c.start));
   const move = <T extends { start: number; end: number }>(x: T): T => ({ ...x, start: t3(map(x.start)), end: t3(map(x.end)) });
   d.texts = d.texts.map(t => ({ ...move(t), ...(t.words ? { words: t.words.map(move) } : {}) })).filter(t => t.end - t.start > 0.05);
   d.effects = d.effects.map(move).filter(e => e.end - e.start > 0.05);

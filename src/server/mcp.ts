@@ -79,7 +79,7 @@ const AGENT_OPS: Record<string, (d: Project, a: any) => StepResult> = {
   remove_silences: ops.removeSilences, add_captions: ops.addCaptions,
   add_text: ops.addText, update_text: ops.updateText, remove_text: ops.removeText,
   add_zoom: ops.addZoom, update_effect: ops.updateEffect, remove_effect: ops.removeEffect,
-  resolve_note: resolveNote, set_canvas: ops.setCanvas, set_ducking: ops.setDucking, set_denoise: ops.setDenoise, set_caption_style: ops.setCaptionStyle, set_reframe: ops.setReframe, set_reframe_key: ops.setReframeKey, set_speed: ops.setSpeed, add_transition: ops.addTransition,
+  resolve_note: resolveNote, set_canvas: ops.setCanvas, set_ducking: ops.setDucking, set_denoise: ops.setDenoise, set_caption_style: ops.setCaptionStyle, set_reframe: ops.setReframe, set_reframe_key: ops.setReframeKey, set_speed: ops.setSpeed, add_transition: ops.addTransition, add_broll: (d: Project, a: any) => ops.addClip(d, { ...a, track: 'overlay' }),
 };
 
 /* ---------- prompts ---------- */
@@ -309,8 +309,9 @@ export function createMcpServer(session?: McpSession): McpServer {
   /* ---------- clips and audio ---------- */
 
   editTool('add_clip', 'Add clip', 'Places a media item on the timeline. By default it is appended at the end of its track and uses the whole file.', {
-    mediaId: z.string(), track: z.enum(['video', 'audio']).optional(),
-    start: z.number().min(0).optional().describe('Timeline position; default: end of track'),
+    mediaId: z.string(), track: z.enum(['video', 'audio', 'overlay']).optional().describe('overlay = B-roll above the main video'),
+    start: z.number().min(0).optional().describe('Timeline position; default: end of track'), end: z.number().optional().describe('Timeline end (alternative to out)'),
+    layout: z.union([z.enum(['full', 'top-half', 'bottom-half', 'pip-top-right', 'pip-top-left', 'pip-bottom-right', 'pip-bottom-left']), z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() })]).optional().describe('Overlay only'),
     in: z.number().min(0).optional().describe('Source in-point'), out: z.number().optional().describe('Source out-point'),
     volume: z.number().min(0).max(2).optional(),
   }, {}, ops.addClip);
@@ -320,7 +321,14 @@ export function createMcpServer(session?: McpSession): McpServer {
     volume: z.number().min(0).max(2).optional(), fadeIn: z.number().min(0).optional(), fadeOut: z.number().min(0).optional(),
     denoise: z.boolean().optional().describe('Background-noise reduction (applied on export)'),
     videoFadeIn: z.number().min(0).optional().describe('Seconds of fade from black at the start'), videoFadeOut: z.number().min(0).optional().describe('Seconds of fade to black at the end'),
+    layout: z.union([z.enum(['full', 'top-half', 'bottom-half', 'pip-top-right', 'pip-top-left', 'pip-bottom-right', 'pip-bottom-left']), z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() })]).optional().describe('B-roll clips: where on the canvas'),
   }, { idempotentHint: true }, ops.updateClip);
+
+  editTool('add_broll', 'Add B-roll', 'Puts a video or image over the main video for a while (full frame or picture-in-picture), muted by default, so the speaker keeps talking underneath. It moves with the speech if pauses are cut later.', {
+    mediaId: z.string(), start: z.number().min(0), end: z.number(), in: z.number().min(0).optional().describe('Source in-point, default 0'),
+    layout: z.union([z.enum(['full', 'top-half', 'bottom-half', 'pip-top-right', 'pip-top-left', 'pip-bottom-right', 'pip-bottom-left']), z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() })]).optional().describe('Default full'),
+    volume: z.number().min(0).max(2).optional().describe('Default 0 (muted)'),
+  }, {}, (d, a) => ops.addClip(d, { ...a, track: 'overlay' }));
 
   editTool('set_speed', 'Change speed', 'Plays one clip or a time range of the video track faster or slower (0.25–4×, audio keeps its pitch). Everything after it, including captions and zooms, moves to stay in sync.', {
     speed: z.number().min(0.25).max(4), clipId: z.string().optional(), start: z.number().optional(), end: z.number().optional(),
@@ -336,7 +344,7 @@ export function createMcpServer(session?: McpSession): McpServer {
   }, { idempotentHint: true }, ops.setDucking);
 
   editTool('set_denoise', 'Reduce background noise', 'Turns noise reduction on or off for one clip, one track, or every clip with audio. Applied on export (and in get_audio_levels).', {
-    enabled: z.boolean(), clipId: z.string().optional(), track: z.enum(['video', 'audio']).optional(),
+    enabled: z.boolean(), clipId: z.string().optional(), track: z.enum(['video', 'audio', 'overlay']).optional(),
   }, { idempotentHint: true }, ops.setDenoise);
 
   reg('normalize_loudness', 'Normalize loudness', 'Measures the whole mix and sets a gain so it hits a loudness target (default -14 LUFS for TikTok/Reels/YouTube), with peaks limited to -1 dB. Re-run after big audio changes. off: true removes it.', {
@@ -349,7 +357,7 @@ export function createMcpServer(session?: McpSession): McpServer {
 
   editTool('set_volume', 'Set volume', 'Sets the volume over a timeline range (clips are split at the edges), or for one clip. 1 = original, 0 = mute, up to 2.', {
     volume: z.number().min(0).max(2), start: z.number().optional(), end: z.number().optional(),
-    clipId: z.string().optional(), track: z.enum(['video', 'audio']).optional().describe('Limit to one track; default both'),
+    clipId: z.string().optional(), track: z.enum(['video', 'audio', 'overlay']).optional().describe('Limit to one track; default all'),
   }, { idempotentHint: true }, ops.setVolume);
 
   editTool('split_clip', 'Split clip', 'Splits a clip in two at a timeline time.', { clipId: z.string(), at: z.number() }, {}, ops.splitClip);

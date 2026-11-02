@@ -148,6 +148,38 @@ try {
     check('the export dips to black at the cut', yExp < 25, `brightness ${yExp}`);
   }
 
+  /* B-roll: full frame and picture-in-picture, checked against the source pixels */
+  if (process.env.LANDSCAPE) {
+    await api('/reset', {});
+    await upload(video);
+    const imp = await call('import_media', { path: process.env.LANDSCAPE });
+    const brollId = imp.structuredContent.created.find(c => c.kind === 'media').id;
+    const b1 = await call('add_broll', { mediaId: brollId, start: 2, end: 4 });
+    const b2 = await call('add_broll', { mediaId: brollId, start: 6, end: 8, in: 3, layout: 'pip-top-right' });
+    const st = await api('/state');
+    check('add_broll full frame and picture-in-picture', b1.structuredContent.status === 'applied' && b2.structuredContent.status === 'applied' && st.project.clips.filter(c => c.track === 'overlay').length === 2 && st.project.clips.find(c => c.track === 'overlay').volume === 0);
+    const ex6 = await exportDraft();
+    const out = exportFile(ex6.url);
+    const cmp = (t, srcT, region, expect) => {
+      const r = spawnSync('ffmpeg', ['-hide_banner', '-ss', String(t), '-i', out, '-ss', String(srcT), '-i', expect === 'broll' ? process.env.LANDSCAPE : video, '-frames:v', '1', '-filter_complex',
+        `[0:v]crop=${region}[o];[1:v]${expect === 'broll' ? (region.startsWith('1080') ? 'scale=-2:1920,crop=1080:1920' : 'scale=-2:480,crop=378:480') : 'scale=1080:-2,crop=1080:1920'}${expect === 'main' && !region.startsWith('1080') ? ',crop=' + region : ''},format=yuv420p[r];[o]format=yuv420p[o2];[o2][r]psnr`, '-f', 'null', '-'], { encoding: 'utf8' }).stderr;
+      return Number(/average:([\d.]+|inf)/.exec(r)?.[1].replace('inf', '99'));
+    };
+    const full = cmp(3, 1, '1080:1920:0:0', 'broll'), fullWrong = cmp(3, 3, '1080:1920:0:0', 'main');
+    check('full-frame B-roll covers the picture', full > 25 && full > fullWrong + 8, `PSNR ${full.toFixed(1)} vs ${fullWrong.toFixed(1)} for the main video`);
+    const pip = cmp(7, 4, '378:480:648:115', 'broll');
+    check('picture-in-picture sits in the top-right box', pip > 22, `PSNR ${pip.toFixed(1)} dB in the box`);
+    const outside = cmp(7, 7, '540:960:0:960', 'main');
+    check('the main video shows outside the box', outside > 22, `PSNR ${outside.toFixed(1)} dB`);
+    const fr = await call('get_frame', { time: 7, width: 360 });
+    const img = fr.content.find(c => c.type === 'image');
+    if (img) fs.writeFileSync(path.join(outDir, 'broll-frame.png'), Buffer.from(img.data, 'base64'));
+    check('get_frame shows B-roll', !!img);
+    const rs = await call('cut_range', { start: 0.5, end: 1.5 });
+    const ov = (await api('/state')).project.clips.filter(c => c.track === 'overlay').sort((a, b) => a.start - b.start);
+    check('B-roll moves with cuts', rs.structuredContent.status === 'applied' && Math.abs(ov[0].start - 1) < 0.01 && Math.abs(ov[1].start - 5) < 0.01, ov.map(c => c.start).join(', '));
+  }
+
   /* reframing landscape footage onto the vertical canvas */
   const landscape = process.env.LANDSCAPE;
   if (landscape) {

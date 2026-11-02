@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import { CAPTION_PRESETS, clipAt, clipEnd, clipLen, fmtTime, positionOf, reframeAt } from '../shared/timeline';
+import { CAPTION_PRESETS, clipAt, clipEnd, clipLen, fmtTime, LAYOUTS, positionOf, reframeAt } from '../shared/timeline';
 import type { Project } from '../shared/types';
 import { clock, useTime } from './clock';
 import { post } from './api';
@@ -126,7 +126,7 @@ export const Inspector = memo(function Inspector({ project, selection, range, on
     const len = clipLen(c);
     return (
       <div className="inspector">
-        <h3><span className={`chip ${c.track}`}>{c.track}</span><span className="name">{m?.name}</span></h3>
+        <h3><span className={`chip ${c.track}`}>{c.track === 'overlay' ? 'b-roll' : c.track}</span><span className="name">{m?.name}</span></h3>
         <div className="grid3">
           <NumField id="clip-start" label="Starts at" value={c.start} min={0} onCommit={up('start')} />
           <NumField id="clip-in" label="From (source)" value={c.in} min={0} onCommit={up('in')} />
@@ -143,7 +143,13 @@ export const Inspector = memo(function Inspector({ project, selection, range, on
             <Slider id="clip-fout" label="Fade out" value={c.fadeOut ?? 0} min={0} max={Math.min(3, len / 2)} step={0.1} format={secs} onLive={up('fadeOut')} />
           </div>
         </>}
-        {c.track === 'video' && <>
+        {c.track === 'overlay' && <div className="field"><span>Where</span>
+          <div className="layouts">{Object.entries(LAYOUTS).map(([k, b]) => {
+            const on = c.layout && Math.abs(c.layout.x - b.x) < 0.01 && Math.abs(c.layout.y - b.y) < 0.01 && Math.abs(c.layout.w - b.w) < 0.01 && Math.abs(c.layout.h - b.h) < 0.01;
+            return <button key={k} title={k} aria-label={k} className={`layout${on ? ' on' : ''}`} onClick={() => onEdit('update_clip', { clipId: c.id, layout: k })}><i style={{ left: `${b.x * 100}%`, top: `${b.y * 100}%`, width: `${b.w * 100}%`, height: `${b.h * 100}%` }} /></button>;
+          })}</div>
+        </div>}
+        {c.track !== 'audio' && <>
           <div className="field"><span>Speed<b>{c.speed ?? 1}×</b></span>
             <div className="row">{[0.5, 0.75, 1, 1.25, 1.5, 2].map(v => <button key={v} className={(c.speed ?? 1) === v ? 'on' : ''} onClick={() => onEdit('set_speed', { clipId: c.id, speed: v })}>{v}×</button>)}</div>
           </div>

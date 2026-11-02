@@ -1,5 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { activeWord, clipAt, clipEnd, dipAt, duckFactor, srcAt, masterGain, POSITION_MARGIN, positionOf, presetOf, reframeAt, textsAt, TEXT_LAYOUT as L, zoomAt } from '../shared/timeline';
+import { activeWord, clipAt, clipEnd, dipAt, duckFactor, layoutOf, srcAt, masterGain, POSITION_MARGIN, positionOf, presetOf, reframeAt, textsAt, TEXT_LAYOUT as L, zoomAt } from '../shared/timeline';
 import type { TextItem } from '../shared/types';
 import type { Clip, MediaAssets, Project, ZoomEffect } from '../shared/types';
 import { clock, usePlaying, useTime } from './clock';
@@ -80,10 +80,12 @@ export const Preview = memo(function Preview({ project, assets, speech, peeking,
   const nKey = nextV ? `${nextV.mediaId}:${(vclips.indexOf(nextV)) % 2}` : '';
   const a = clipAt(project, 'audio', time);
   const aKey = a ? `${a.mediaId}:a` : '';
+  const o = clipAt(project, 'overlay', time);
+  const oKey = o ? `${o.mediaId}:o` : '';
 
   useEffect(() => {
     for (const [key, el] of els.current) {
-      const clip = key === vKey ? v : key === aKey ? a : undefined;
+      const clip = key === vKey ? v : key === aKey ? a : key === oKey ? o : undefined;
       if (!clip) {
         if (!el.paused) el.pause();
         if (key === nKey && nextV && key !== vKey && !el.seeking && Math.abs(el.currentTime - nextV.in) > 0.05) el.currentTime = nextV.in;
@@ -137,6 +139,7 @@ export const Preview = memo(function Preview({ project, assets, speech, peeking,
           return out;
         })}
       </div>
+      {o && <BRoll clip={o} project={project} assets={assets} els={els.current} time={time} />}
       {texts.map(t => <Overlay key={t.id} t={t} time={time} scale={scale} base={base} pad={pad} H={project.height} />)}
       {dipAt(v, time) > 0 && <div className="dip" style={{ opacity: dipAt(v, time) }} />}
       {!v && <div className="empty-frame">{project.clips.length ? 'No video here' : 'Drop a video anywhere to start'}</div>}
@@ -169,6 +172,29 @@ function Overlay({ t, time, scale, base, pad, H }: { t: TextItem; time: number; 
   return (
     <div className={`ov caption${P.box ? ' boxed' : ''}`} style={{ ...place, fontSize: size / L.lineEm, lineHeight: L.lineEm, color: P.base, WebkitTextStrokeWidth: P.box ? 0 : size * P.outline * 2, padding: pad, textShadow: P.outline === 0 ? `0 ${size * 0.05}px ${size * 0.1}px #000a` : undefined }}>
       {P.box ? <span className="box" style={{ padding: `0 ${size * P.outline}px` }}>{inner}</span> : inner}
+    </div>
+  );
+}
+
+/** B-roll in its box, above the zoomed picture. Its <video> registers with the shared sync loop. */
+function BRoll({ clip, project, assets, els, time }: { clip: Clip; project: Project; assets: Record<string, MediaAssets>; els: Map<string, HTMLMediaElement>; time: number }) {
+  const box = layoutOf(clip);
+  const m = project.media.find(x => x.id === clip.mediaId);
+  const key = `${clip.mediaId}:o`;
+  const vref = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const el = vref.current;
+    if (!el) return;
+    els.set(key, el);
+    el.currentTime = srcAt(clip, clock.get());
+    return () => { els.delete(key); };
+  }, [key, m?.kind]);
+  const style: React.CSSProperties = { left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.w * 100}%`, height: `${box.h * 100}%`, opacity: 1 - dipAt(clip, time) };
+  if (!m) return null;
+  if (m.kind === 'image') return <div className="broll" style={style}><img src={mediaUrl(m.file)} alt="" className="media on" /></div>;
+  return (
+    <div className="broll" style={style}>
+      <video ref={vref} src={mediaUrl(assets[m.id]?.proxy?.file ?? m.file)} preload="auto" playsInline className="media on" />
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CAPTION_PRESETS, clipEnd, clipLen, dipAt, DUCK_GAP, speedOf, srcAt, duration, POSITION_MARGIN, positionOf, presetOf, speechRegions, TEXT_LAYOUT as L } from '../shared/timeline.js';
+import { CAPTION_PRESETS, clipEnd, clipLen, dipAt, DUCK_GAP, layoutOf, speedOf, srcAt, duration, POSITION_MARGIN, positionOf, presetOf, speechRegions, TEXT_LAYOUT as L } from '../shared/timeline.js';
 import type { Clip, Media, Project, TextItem, ZoomEffect } from '../shared/types.js';
 import { FFMPEG, mediaPath } from './media.js';
 import { EXPORT_DIR, store } from './store.js';
@@ -200,7 +200,8 @@ export function buildCommand(p: Project, out: string, assFile: string, quality: 
   const wantV = o.kind !== 'wav', wantA = o.kind !== 'png';
   const pick = (segs: Seg[], first: number) => segs.map(s => `between(n,${s.iF - first},${s.iF - first + s.lF - 1})`).join('+');
 
-  for (const track of ['video', 'audio'] as const) {
+  const overlays: { label: string; x: number; y: number; from: number; to: number }[] = [];
+  for (const track of ['video', 'audio', 'overlay'] as const) {
     const clips = p.clips.filter(c => c.track === track && media.has(c.mediaId) && clipLen(c) > 0);
     for (const run of runsFor(clips, fps, media)) {
       const m = media.get(run.mediaId)!;
@@ -228,6 +229,15 @@ export function buildCommand(p: Project, out: string, assFile: string, quality: 
           base = `ov${ov}`;
         }
       }
+      if (wantV && track === 'overlay' && m.kind !== 'audio') {
+        // B-roll: cover-fit into its box; composited after the zoom so punch-ins do not move it.
+        const box = layoutOf(first.clip);
+        const bw = Math.max(2, Math.round((W * box.w) / 2) * 2), bh = Math.max(2, Math.round((H * box.h) / 2) * 2);
+        const sel = single ? `trim=end_frame=${frames},` : `select='${pick(run.segs, first.iF)}',`;
+        const stretch = sp !== 1 ? `setpts=(PTS-STARTPTS)/${n(sp)},` : '';
+        f.push(`[${i}:v]${stretch}fps=${fps},${sel}setpts=N/${fps}/TB+${n(startT)}/TB,scale=${bw}:${bh}:force_original_aspect_ratio=increase,crop=${bw}:${bh},setsar=1,format=yuv420p${dips}[o${i}]`);
+        overlays.push({ label: `o${i}`, x: Math.round(W * box.x), y: Math.round(H * box.y), from: startT, to: endT });
+      }
       if (wantA && m.hasAudio && run.segs.some(s => s.clip.volume > 0)) {
         const sel = single ? `atrim=end_sample=${frames * spf},` : `asetnsamples=n=${spf}:p=1,aselect='${pick(run.segs, first.iF)}',`;
         const gain = gainExpr(run, fps);
@@ -248,6 +258,12 @@ export function buildCommand(p: Project, out: string, assFile: string, quality: 
   if (wantV && !fullCover) f.unshift(`color=c=black:s=${W}x${H}:r=${fps}:d=${n(D)}[base0]`);
   let v = base;
   if (wantV) {
+    // B-roll goes over the zoomed main picture (spliced in just before the captions below).
+    const overlayChain = (src: string) => {
+      let cur = src;
+      overlays.forEach((o, k) => { f.push(`[${cur}][${o.label}]overlay=x=${o.x}:y=${o.y}:eof_action=pass:enable='between(t,${n(o.from)},${n(o.to)})'[bo${k}]`); cur = `bo${k}`; });
+      return cur;
+    };
     const groups = zoomGroups(p.effects.filter((e): e is ZoomEffect => e.kind === 'zoom'), fps, D);
     if (groups.length) {
       // Split the timeline into plain and zoomed parts; only zoomed parts pay for zoompan.
@@ -263,6 +279,7 @@ export function buildCommand(p: Project, out: string, assFile: string, quality: 
       f.push(`${parts.map((_, k) => `[zp${k}]`).join('')}concat=n=${parts.length}:v=1:a=0[vz]`);
       v = 'vz';
     }
+    v = overlayChain(v);
     if (p.texts.length) {
       const esc = (s: string) => s.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
       f.push(`[${v}]ass='${esc(assFile)}':fontsdir='${esc(FONTS_DIR)}':shaping=complex[vt]`);

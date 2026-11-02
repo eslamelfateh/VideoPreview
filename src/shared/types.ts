@@ -14,7 +14,9 @@ export interface Media {
   hasAudio: boolean;
 }
 
-export type Track = 'video' | 'audio';
+/** overlay = B-roll above the main video (full frame or picture-in-picture). */
+export type Track = 'video' | 'audio' | 'overlay';
+export interface Box { x: number; y: number; w: number; h: number } // fractions of the canvas
 
 export interface Clip {
   id: string;
@@ -30,6 +32,7 @@ export interface Clip {
   speed?: number; // 0.25..4, default 1 (audio keeps its pitch)
   videoFadeIn?: number; // seconds of fade from black
   videoFadeOut?: number; // seconds of fade to black
+  layout?: Box; // overlay clips: where on the canvas (default: full frame)
   /** Internal, for single-frame renders: how dark this frame is from a fade (0..1). */
   stillDim?: number;
 }

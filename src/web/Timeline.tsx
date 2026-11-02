@@ -11,6 +11,7 @@ export type Range = { start: number; end: number } | null;
 const ICONS = {
   notes: <svg viewBox="0 0 24 24"><path d="M5 21V4h11l-2 4 2 4H5" /></svg>,
   video: <svg viewBox="0 0 24 24"><rect x="2" y="6" width="14" height="12" rx="2" /><path d="m16 10 6-3v10l-6-3" /></svg>,
+  'b-roll': <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><rect x="12" y="11" width="7" height="7" rx="1" /></svg>,
   text: <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h13" /></svg>,
   fx: <svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2 2M16 16l2 2M6 18l2-2M16 8l2-2" /></svg>,
   audio: <svg viewBox="0 0 24 24"><path d="M9 18V5l11-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="17" cy="16" r="3" /></svg>,
@@ -18,7 +19,7 @@ const ICONS = {
 
 /* ---------- one canvas per track: thumbnails, waveforms, volume lines, only for the visible part ---------- */
 
-const COLORS = { video: '#d6d3cb', audio: '#e3f4ec' };
+const COLORS = { video: '#d6d3cb', audio: '#e3f4ec', overlay: '#c9d6ea' };
 
 function useMediaAssets(assets: Record<string, MediaAssets>) {
   const [loaded, setLoaded] = useState<Record<string, { img?: HTMLImageElement; peaks?: Uint8Array }>>({});
@@ -34,7 +35,7 @@ function useMediaAssets(assets: Record<string, MediaAssets>) {
 }
 
 interface LaneProps {
-  track: 'video' | 'audio';
+  track: 'video' | 'audio' | 'overlay';
   clips: (Clip & { end: number })[];
   media: Map<string, Media>;
   assets: Record<string, MediaAssets>;
@@ -63,7 +64,7 @@ const LaneCanvas = memo(function LaneCanvas({ track, clips, media, assets, loade
       const len = c.out - c.in, cpps = cw / len;
       const from = Math.max(x0, 0), to = Math.min(x0 + cw, w);
       const th = assets[c.mediaId]?.thumbs, img = loaded[c.mediaId]?.img;
-      if (track === 'video' && th && img) {
+      if (track !== 'audio' && th && img) {
         const tw = th.width * (h / th.height);
         const k0 = Math.floor((from - x0) / tw);
         for (let xx = x0 + k0 * tw; xx < to; xx += tw) {
@@ -75,8 +76,8 @@ const LaneCanvas = memo(function LaneCanvas({ track, clips, media, assets, loade
       }
       const pk = assets[c.mediaId]?.peaks, peaks = loaded[c.mediaId]?.peaks;
       if (pk && peaks) {
-        const wt = track === 'video' ? top + h * 0.62 : top, wh = track === 'video' ? h * 0.38 : h, mid = wt + wh / 2;
-        g.fillStyle = track === 'video' ? 'rgba(227,244,236,.75)' : 'rgba(31,74,55,.55)';
+        const wt = track !== 'audio' ? top + h * 0.62 : top, wh = track !== 'audio' ? h * 0.38 : h, mid = wt + wh / 2;
+        g.fillStyle = track !== 'audio' ? 'rgba(227,244,236,.75)' : 'rgba(31,74,55,.55)';
         for (let xx = Math.floor(from); xx < to; xx++) {
           const a = Math.floor((c.in + (xx - x0) / cpps) * pk.perSecond), b = Math.max(a + 1, Math.floor((c.in + (xx + 1 - x0) / cpps) * pk.perSecond));
           let m = 0;
@@ -257,19 +258,20 @@ export function Timeline({ project, assets, selection, onSelect, range, onRange,
   const handlers = (kind: Kind, id: string) => ({ onPointerDown: itemDown(kind, id), onPointerMove: itemMove, onPointerUp: itemUp, onPointerCancel: () => setDrag(null) });
   const style = (b: Box) => ({ left: x(b.start), width: Math.max(6, x(b.end) - x(b.start) - 1) });
 
-  const laneClips = (track: 'video' | 'audio') => project.clips.filter(c => c.track === track).map(c => {
+  const laneClips = (track: 'video' | 'audio' | 'overlay') => project.clips.filter(c => c.track === track).map(c => {
     const b = geo('clip', c.id)!;
     return { ...c, start: b.start, in: b.in!, out: b.out!, end: b.end };
   });
   const videoClips = useMemo(() => laneClips('video'), [project.clips, pending, drag, live?.start, live?.end, live?.in, live?.out]);
+  const overlayClips = useMemo(() => laneClips('overlay'), [project.clips, pending, drag, live?.start, live?.end, live?.in, live?.out]);
   const audioClips = useMemo(() => laneClips('audio'), [project.clips, pending, drag, live?.start, live?.end, live?.in, live?.out]);
 
-  const clipsOn = (track: 'video' | 'audio', list: (Clip & { end: number })[]) => <>
+  const clipsOn = (track: 'video' | 'audio' | 'overlay', list: (Clip & { end: number })[]) => <>
     <LaneCanvas track={track} clips={list} media={media} assets={assets} loaded={loaded} pps={pps} scrollX={scrollX} width={width} />
     {list.filter(c => visible(c.start, c.end)).map(c => {
       const m = media.get(c.mediaId);
       return (
-        <div key={c.id} className={cls('clip', c.id, track === 'video' ? 'v' : 'a')} style={style(c)} {...handlers('clip', c.id)} title={`${m?.name ?? ''} · ${fmtTime(c.start)}–${fmtTime(c.end)} · volume ${Math.round(c.volume * 100)}%`}>
+        <div key={c.id} className={cls('clip', c.id, track === 'video' ? 'v' : track === 'overlay' ? 'v o' : 'a')} style={style(c)} {...handlers('clip', c.id)} title={`${m?.name ?? ''} · ${fmtTime(c.start)}–${fmtTime(c.end)} · volume ${Math.round(c.volume * 100)}%`}>
           <span className="label">{m?.name}{(c.speed ?? 1) !== 1 && <b className="vol">{c.speed}×</b>}{c.volume !== 1 && <b className="vol">{Math.round(c.volume * 100)}%</b>}</span>
         </div>
       );
@@ -285,7 +287,7 @@ export function Timeline({ project, assets, selection, onSelect, range, onRange,
           <button aria-label="Zoom out timeline" onClick={() => setZoom(z => Math.max(1, z / 1.6))} disabled={zoom === 1}>−</button>
           <button aria-label="Zoom in timeline" onClick={() => setZoom(z => Math.min(60, z * 1.6))}>+</button>
         </div>
-        {(['notes', 'video', 'text', 'fx', 'audio'] as const).map(k => <div key={k} className="tl-label">{ICONS[k]}{k}</div>)}
+        {(['notes', 'video', 'b-roll', 'text', 'fx', 'audio'] as const).map(k => <div key={k} className="tl-label">{ICONS[k]}{k}</div>)}
       </div>
       <div className="tl-scroll" ref={scroller} onScroll={e => { const v = (e.currentTarget as HTMLElement).scrollLeft; requestAnimationFrame(() => setScrollX(v)); }}>
         <div className="tl-lanes" style={{ width: Math.max(width, x(total)) }}
@@ -304,6 +306,7 @@ export function Timeline({ project, assets, selection, onSelect, range, onRange,
               </div>); })}
           </div>
           <div className="lane">{clipsOn('video', videoClips)}</div>
+          <div className="lane">{clipsOn('overlay', overlayClips)}</div>
           <div className="lane">
             {project.texts.map(t => { const b = geo('text', t.id)!; if (!visible(b.start, b.end)) return null; return (
               <div key={t.id} className={cls('text', t.id, t.style === 'title' ? 't title' : 't')} style={style(b)} {...handlers('text', t.id)} title={t.text} dir="auto">{t.text}</div>); })}
