@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -6,7 +6,15 @@ import type { Media } from '../shared/types.js';
 import { FFMPEG, mediaPath } from './media.js';
 import { MEDIA_DIR, store } from './store.js';
 
-const run = promisify(execFile);
+const exec = promisify(execFile);
+
+/**
+ * Background work (proxies, thumbnails, waveforms) runs at the lowest CPU priority, so a
+ * long upload does not slow down playback in the editor or a running export.
+ */
+const NICE = process.platform !== 'win32' && spawnSync('nice', ['-n', '19', 'true']).status === 0;
+const low = (cmd: string, args: string[]): [string, string[]] => (NICE ? ['nice', ['-n', '19', cmd, ...args]] : [cmd, args]);
+const run = (cmd: string, args: string[], opts: object = {}) => exec(...low(cmd, args), opts);
 const PEAKS_PER_SECOND = 50;
 const THUMB_H = 64;
 
@@ -14,7 +22,7 @@ const THUMB_H = 64;
 function peaks(m: Media, out: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const rate = 8000, per = rate / PEAKS_PER_SECOND;
-    const p = spawn(FFMPEG, ['-v', 'error', '-i', mediaPath(m), '-vn', '-ac', '1', '-ar', String(rate), '-f', 's16le', 'pipe:1']);
+    const p = spawn(...low(FFMPEG, ['-v', 'error', '-i', mediaPath(m), '-vn', '-ac', '1', '-ar', String(rate), '-f', 's16le', 'pipe:1']));
     const result: number[] = [];
     let max = 0, n = 0, carry: Buffer = Buffer.alloc(0);
     p.stdout.on('data', (b: Buffer) => {
