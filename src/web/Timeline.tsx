@@ -1,4 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { t } from './i18n';
 import { clipEnd, duration, fmtTime } from '../shared/timeline';
 import type { Clip, Media, MediaAssets, Project } from '../shared/types';
 import { loadImage, loadPeaks } from './assets';
@@ -295,7 +296,7 @@ export function Timeline({ project, assets, selection, onSelect, range, onRange,
         <div className="tl-lanes" style={{ width: Math.max(width, x(total)) }}
           onPointerDown={e => { if (e.button !== 0) return; (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); clock.pause(); clock.seek(tAt(e)); onSelect(null); }}
           onPointerMove={e => { if ((e.buttons & 1) && !drag && rangeDrag === null) clock.seek(tAt(e)); }}>
-          <div className="ruler" title="Drag here to select a range"
+          <div className="ruler" title={t("Drag here to select a range")}
             onPointerDown={e => { e.stopPropagation(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); const t = tAt(e); setRangeDrag(t); onRange(null); clock.pause(); clock.seek(t); }}
             onPointerMove={e => { if (rangeDrag === null) return; const t = tAt(e); if (Math.abs(t - rangeDrag) * pps > 4) onRange({ start: Math.min(t, rangeDrag), end: Math.max(t, rangeDrag) }); }}
             onPointerUp={() => setRangeDrag(null)}>

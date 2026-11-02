@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { t } from './i18n';
 import { applyChanges } from '../shared/diff';
 import { clipAt, clipEnd, duration, fmtTime } from '../shared/timeline';
 import type { Marker, ProjectInfo, Step, VersionInfo } from '../shared/types';
@@ -25,27 +26,27 @@ function Projects({ projects, current, name, reviewToken, onError }: { projects:
         <div className="menu" role="dialog" aria-label="Projects">
           <form className="row" onSubmit={e => { e.preventDefault(); act(post('/projects/rename', { name: rename })); }}>
             <input id="project-rename" value={rename} onChange={e => setRename(e.target.value)} aria-label="Project name" dir="auto" />
-            <button type="submit" disabled={rename === name}>Rename</button>
+            <button type="submit" disabled={rename === name}>{t("Rename")}</button>
           </form>
           <div className="review-link">
-            <b>Review link</b>
-            <span className="meta-line">Anyone with it can watch this project and pin notes for the agent, but not edit.</span>
+            <b>{t("Review link")}</b>
+            <span className="meta-line">{t("Anyone with it can watch this project and pin notes for the agent, but not edit.")}</span>
             {link
-              ? <div className="row"><input id="review-url" readOnly value={link} aria-label="Review link" onFocus={e => e.currentTarget.select()} />
+              ? <div className="row"><input id="review-url" readOnly value={link} aria-label={t("Review link")} onFocus={e => e.currentTarget.select()} />
                   <button onClick={() => navigator.clipboard.writeText(link).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => (document.getElementById('review-url') as HTMLInputElement)?.select())}>{copied ? 'Copied' : 'Copy'}</button>
-                  <button className="quiet danger" onClick={() => act(post('/review-link/revoke'))}>Turn off</button></div>
-              : <button onClick={() => act(post('/review-link'))}>Create review link</button>}
+                  <button className="quiet danger" onClick={() => act(post('/review-link/revoke'))}>{t("Turn off")}</button></div>
+              : <button onClick={() => act(post('/review-link'))}>{t("Create review link")}</button>}
           </div>
           <form className="row" onSubmit={e => { e.preventDefault(); act(post('/projects', { name: newName }).then(() => setNewName(''))); }}>
-            <input id="project-new" value={newName} onChange={e => setNewName(e.target.value)} placeholder="New project name" dir="auto" aria-label="New project name" />
-            <button type="submit" className="primary">New</button>
+            <input id="project-new" value={newName} onChange={e => setNewName(e.target.value)} placeholder={t("New project name")} dir="auto" aria-label={t("New project name")} />
+            <button type="submit" className="primary">{t("New")}</button>
           </form>
           <ul>{projects.map(p => (
             <li key={p.id} className={p.id === current ? 'current' : ''}>
               <div><b dir="auto">{p.name}</b><span className="meta-line">{p.id === current ? 'open now' : new Date(p.updated).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</span></div>
               {p.id !== current && (confirm === p.id
-                ? <><button className="danger" onClick={() => { act(post(`/projects/${p.id}/delete`)); setConfirm(null); }}>Delete</button><button onClick={() => setConfirm(null)}>Keep</button></>
-                : <><button onClick={() => act(post(`/projects/${p.id}/open`))}>Open</button><button className="quiet" aria-label={`Delete ${p.name}`} onClick={() => setConfirm(p.id)}>×</button></>)}
+                ? <><button className="danger" onClick={() => { act(post(`/projects/${p.id}/delete`)); setConfirm(null); }}>{t("Delete")}</button><button onClick={() => setConfirm(null)}>{t("Keep")}</button></>
+                : <><button onClick={() => act(post(`/projects/${p.id}/open`))}>{t("Open")}</button><button className="quiet" aria-label={`Delete ${p.name}`} onClick={() => setConfirm(p.id)}>×</button></>)}
             </li>
           ))}</ul>
         </div>
@@ -66,13 +67,13 @@ function ReviewPanel({ markers, range, onRange, onError }: { markers: Marker[]; 
   };
   return (
     <div className="inspector">
-      <h3><span className="chip range">review</span><span className="name">Leave a note</span></h3>
-      <p className="meta-line">Play the video, then drag on the ruler above the timeline to pick a moment (or use the playhead). Your note is pinned there for the editor and the AI agent.</p>
+      <h3><span className="chip range">review</span><span className="name">{t("Leave a note")}</span></h3>
+      <p className="meta-line">{t("Play the video, then drag on the ruler above the timeline to pick a moment (or use the playhead). Your note is pinned there for the editor and the AI agent.")}</p>
       <label className="field col" htmlFor="review-text"><span>{range ? `${fmtTime(range.start)} → ${fmtTime(range.end)}` : `At ${fmtTime(clock.get())}`}</span>
         <textarea id="review-text" rows={3} dir="auto" value={text} onChange={e => setText(e.target.value)} placeholder="e.g. الكابشن هنا صغير · cut this part" /></label>
       <div className="row">
-        <button className="primary" disabled={!text.trim()} onClick={() => send('do')}>Send note</button>
-        <button disabled={!text.trim()} onClick={() => send('dont')}>🔒 Keep this part as is</button>
+        <button className="primary" disabled={!text.trim()} onClick={() => send('do')}>{t("Send note")}</button>
+        <button disabled={!text.trim()} onClick={() => send('dont')}>{t("🔒 Keep this part as is")}</button>
       </div>
       {sent && <p className="reply">{sent}</p>}
       {markers.length > 0 && <ul className="keylist">{markers.map(m => (
@@ -91,18 +92,18 @@ function Versions({ versions, onError }: { versions: VersionInfo[]; onError: (m:
     <div className="versions">
       <button aria-expanded={open} onClick={() => setOpen(o => !o)}>Versions{versions.length ? ` (${versions.length})` : ''}</button>
       {open && (
-        <div className="menu" role="dialog" aria-label="Versions">
+        <div className="menu" role="dialog" aria-label={t("Versions")}>
           <form className="row" onSubmit={e => { e.preventDefault(); act(post('/versions', { name }).then(() => setName(''))); }}>
-            <input id="version-name" value={name} onChange={e => setName(e.target.value)} placeholder="Name this version" dir="auto" aria-label="Version name" />
-            <button type="submit" className="primary">Save</button>
+            <input id="version-name" value={name} onChange={e => setName(e.target.value)} placeholder={t("Name this version")} dir="auto" aria-label="Version name" />
+            <button type="submit" className="primary">{t("Save")}</button>
           </form>
-          {versions.length === 0 && <p className="meta-line">Save the current edit to compare it with another one later, or ask the agent for two versions.</p>}
+          {versions.length === 0 && <p className="meta-line">{t("Save the current edit to compare it with another one later, or ask the agent for two versions.")}</p>}
           <ul>{[...versions].reverse().map(v => (
             <li key={v.id}>
               <div><b dir="auto">{v.name}</b><span className="meta-line">{fmtTime(v.duration)} · {v.clips} clips · {v.texts} texts · {new Date(v.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div>
               {confirm === v.id
-                ? <><button className="danger" onClick={() => { act(post(`/versions/${v.id}/delete`)); setConfirm(null); }}>Delete</button><button onClick={() => setConfirm(null)}>Keep</button></>
-                : <><button onClick={() => act(post(`/versions/${v.id}/load`))} title="Replaces the timeline; you can undo it">Open</button><button className="quiet" aria-label={`Delete ${v.name}`} onClick={() => setConfirm(v.id)}>×</button></>}
+                ? <><button className="danger" onClick={() => { act(post(`/versions/${v.id}/delete`)); setConfirm(null); }}>{t("Delete")}</button><button onClick={() => setConfirm(null)}>{t("Keep")}</button></>
+                : <><button onClick={() => act(post(`/versions/${v.id}/load`))} title="Replaces the timeline; you can undo it">{t("Open")}</button><button className="quiet" aria-label={`Delete ${v.name}`} onClick={() => setConfirm(v.id)}>×</button></>}
             </li>
           ))}</ul>
         </div>
@@ -239,7 +240,7 @@ export function App() {
         {REVIEW ? <span className="review-badge">Review · {project.name}</span>
           : <Projects projects={state.projects} current={state.projectId} name={project.name} reviewToken={state.reviewToken} onError={setError} />}
         <span className="meta">{project.width}×{project.height} · {project.fps}fps · {fmtTime(total)}</span>
-        {!online && <span className="offline">reconnecting…</span>}
+        {!online && <span className="offline">{t("reconnecting…")}</span>}
         <div className="spacer" />
         <input ref={fileInput} id="file-input" type="file" multiple accept="video/*,audio/*,image/*" hidden onChange={e => { doUpload(e.target.files); e.target.value = ''; }} />
         {!REVIEW && <>
@@ -248,13 +249,13 @@ export function App() {
         {render.status === 'rendering'
           ? <span className="progress" title={render.encoder}><span style={{ width: `${Math.round(render.progress * 100)}%` }} />Exporting {Math.round(render.progress * 100)}%</span>
           : <>
-            <button onClick={() => post('/export', { quality: 'draft' }).catch(e => setError(e.message))} disabled={!project.clips.length} title="Faster, lower quality, for checking">Quick draft</button>
-            <button className="primary" onClick={() => post('/export', { quality: 'final' }).catch(e => setError(e.message))} disabled={!project.clips.length}>Export MP4</button>
+            <button onClick={() => post('/export', { quality: 'draft' }).catch(e => setError(e.message))} disabled={!project.clips.length} title="Faster, lower quality, for checking">{t("Quick draft")}</button>
+            <button className="primary" onClick={() => post('/export', { quality: 'final' }).catch(e => setError(e.message))} disabled={!project.clips.length}>{t("Export MP4")}</button>
           </>}
-        {render.status === 'done' && render.file && <a className="download" href={`/exports/${render.file}`} title={render.encoder ? `Encoded with ${render.encoder}` : undefined}>Download</a>}
+        {render.status === 'done' && render.file && <a className="download" href={`/exports/${render.file}`} title={render.encoder ? `Encoded with ${render.encoder}` : undefined}>{t("Download")}</a>}
         {confirmReset
-          ? <span className="confirm">Empty this project (clips, steps, versions)? <button onClick={() => { post('/reset'); setConfirmReset(false); clock.seek(0); setSelection(null); setRange(null); }}>Delete</button><button onClick={() => setConfirmReset(false)}>Cancel</button></span>
-          : <button className="ghost" onClick={() => setConfirmReset(true)}>Clear</button>}
+          ? <span className="confirm">{t("Empty this project (clips, steps, versions)?")} <button onClick={() => { post('/reset'); setConfirmReset(false); clock.seek(0); setSelection(null); setRange(null); }}>{t("Delete")}</button><button onClick={() => setConfirmReset(false)}>{t("Cancel")}</button></span>
+          : <button className="ghost" onClick={() => setConfirmReset(true)}>{t("Clear")}</button>}
         </>}
       </header>
 
@@ -270,7 +271,7 @@ export function App() {
           <div className="transport">
             <PlayButton />
             <TimeDisplay total={total} />
-            {!REVIEW && <label className="follow"><input id="follow" type="checkbox" checked={follow} onChange={e => setFollow(e.target.checked)} /> follow agent</label>}
+            {!REVIEW && <label className="follow"><input id="follow" type="checkbox" checked={follow} onChange={e => setFollow(e.target.checked)} /> {t("follow agent")}</label>}
             {openNotes > 0 && <span className="open-notes">{openNotes} note{openNotes > 1 ? 's' : ''} waiting for the agent</span>}
             <span className={`live ${state.control.paused ? 'paused' : state.agentConnected ? 'busy' : ''}`}><b />{state.control.paused ? 'paused · you have control' : peekStep ? `before step ${peekStep.n}` : 'live preview'}</span>
           </div>
@@ -280,7 +281,7 @@ export function App() {
         {!REVIEW && <Steps state={state} onJump={onJump} onPeek={setPeek} onHover={setHover} onError={setError} />}
       </main>
 
-      {dragging && <div className="dropzone">Drop to add to the timeline</div>}
+      {dragging && <div className="dropzone">{t("Drop to add to the timeline")}</div>}
       {error && <div className="toast" role="alert" onClick={() => setError('')}>{error}</div>}
     </div>
   );
