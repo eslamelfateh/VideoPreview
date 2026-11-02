@@ -1,0 +1,17 @@
+{
+  "description": "Delivers the user's live-review notes to Claude while it works, and keeps it from finishing with notes still open.",
+  "hooks": {
+    "PostToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/live-review.mjs\" hook post-tool", "timeout": 10 }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/live-review.mjs\" hook prompt", "timeout": 10 }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/live-review.mjs\" hook stop", "timeout": 10 }] }
+    ],
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/live-review.mjs\" hook session", "timeout": 10 }] }
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "live-review",
+  "version": "0.1.0",
+  "description": "Watch Claude edit your video as it works (Remotion or ffmpeg): every step shows up as a quick preview in a review page, and you can stop it at any moment with a note pinned to the exact frame.",
+  "author": { "name": "eslamelfateh" },
+  "homepage": "https://github.com/eslamelfateh/VideoPreview",
+  "repository": "https://github.com/eslamelfateh/VideoPreview",
+  "license": "MIT",
+  "keywords": ["video", "remotion", "ffmpeg", "review", "preview", "editing"]
+}

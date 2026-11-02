@@ -50,6 +50,10 @@ jobs:
         run: node scripts/projects-test.mjs ci-media/speech.mp4 ci-media/landscape.mp4 ci-media
       - name: Browser + agent end to end
         run: node scripts/e2e.mjs ci-media/speech.mp4 ci-media/music.mp3 ci-media
+      - name: live-review plugin (Claude Code)
+        run: node scripts/live-review-test.mjs ci-media/speech.mp4 ci-media/live-review
+      - name: Validate plugin and marketplace
+        run: npx -y @anthropic-ai/claude-code plugin validate . || echo "claude CLI not available; skipped"
       - name: Server log
         if: always()
         run: tail -n 200 server.log

@@ -16,6 +16,17 @@ Most AI video tools work in the background and hand you a finished file. LiveCut
 
 Built Arabic-first: Egyptian/MSA transcripts, right-to-left word-by-word karaoke captions, and spelling-tolerant search (`النهاردة` finds `النهارده`). Works for any language.
 
+## Using Claude Code with ffmpeg or Remotion instead?
+
+The **live-review** plugin in this repo adds the same "watch and stop it" review to Claude's own video edits, without LiveCut: each change shows up as a quick preview in a review page (Remotion Studio for Remotion), and your notes on a frame reach Claude while it works.
+
+```
+/plugin marketplace add eslamelfateh/VideoPreview
+/plugin install live-review@videopreview
+```
+
+See [plugins/live-review](plugins/live-review/README.md).
+
 ## What you can do while the agent edits
 
 | | |
@@ -149,7 +160,7 @@ Check a change end to end with a running server (`npm start`):
 - GitHub Actions (`.github/workflows/ci.yml`) runs all of these on every push, with synthetic test media.
 - `node scripts/perf.mjs <long-video>` is a load test: hundreds of clips and captions; it reports frame rate, stalls, edit latency and export time.
 
-Measured on a 4-core container with a 10-minute video cut into 420 clips with 420 captions and 20 zooms: playback 59 fps with no stalls at cuts, edits reach the preview in ~160 ms, the editor opens in under a second, and export runs at about 0.6x real time (final) on 4 cores.
+Measured on a 4-core container with a 10-minute video cut into 420 clips with 420 captions and 20 zooms (0.2 build): playback 60 fps with no stalls at cuts (three runs), scrubbing ~29 ms per move, edits reach the preview in ~160–230 ms, the editor opens in about a second, and the 7.3-minute result exports in 217 s (final) on 4 cores. While a long video's preview proxy is still being made in the background, playback can dip to ~56 fps on a 4-core machine.
 
 ## Status and roadmap
 

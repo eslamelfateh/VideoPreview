@@ -1,0 +1,15 @@
+{
+  "name": "videopreview",
+  "description": "Tools for reviewing video edits made by AI agents while they work.",
+  "owner": {
+    "name": "eslamelfateh"
+  },
+  "plugins": [
+    {
+      "name": "live-review",
+      "source": "./plugins/live-review",
+      "description": "Live review for video edits made by Claude with Remotion or ffmpeg: quick per-step previews and notes that reach Claude mid-task.",
+      "version": "0.1.0"
+    }
+  ]
+}
