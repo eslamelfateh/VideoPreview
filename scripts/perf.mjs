@@ -104,9 +104,14 @@ console.log(`edit round trip: ${(performance.now() - latT).toFixed(0)}ms ${ok ? 
 await page.screenshot({ path: path.join(outDir, 'perf-editor.png') });
 await browser.close();
 
-const dr = await timed('export (draft)', () => call('export_video', { quality: 'draft' }));
-console.log(dr.split('\n')[0]);
-const ex = await timed('export (final)', () => call('export_video'));
-console.log(ex.split('\n')[0]);
+// export_video returns within ~45s; keep waiting with get_export_status until it is done.
+const exportAll = async quality => {
+  let t = await call('export_video', { quality });
+  let polls = 0;
+  while (/still running/.test(t)) { polls++; t = await call('get_export_status', { wait_seconds: 100 }); }
+  return `${t.split('\n')[0]} (${polls} status calls)`;
+};
+console.log(await timed('export (draft)', () => exportAll('draft')));
+console.log(await timed('export (final)', () => exportAll('final')));
 console.log(errors.length ? `browser errors: ${errors.join(' | ')}` : 'no browser errors');
 await agent.close();
