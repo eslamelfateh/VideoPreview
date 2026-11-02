@@ -1,7 +1,8 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import { clipAt, clipEnd, fmtTime } from '../shared/timeline';
+import { CAPTION_PRESETS, clipAt, clipEnd, fmtTime, positionOf } from '../shared/timeline';
 import type { Project } from '../shared/types';
 import { clock } from './clock';
+import { post } from './api';
 import type { Range, Selection } from './Timeline';
 
 type Edit = (op: string, args: Record<string, unknown>) => Promise<unknown>;
@@ -60,6 +61,31 @@ function TextBox({ id, label, value, placeholder, onCommit }: { id: string; labe
 }
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
+
+function AudioSettings({ project, onEdit }: { project: Project; onEdit: Edit }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const duck = project.audio?.duck, loud = project.audio?.loudness;
+  const hasMusic = project.clips.some(c => c.track === 'audio');
+  const normalize = async (target: number) => {
+    setBusy(true); setErr('');
+    try { await post('/audio/normalize', { target }); } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+  };
+  return (
+    <div className="audio-settings">
+      <h4>Audio</h4>
+      <label className="check" htmlFor="duck-on"><input id="duck-on" type="checkbox" checked={!!duck} disabled={!hasMusic}
+        onChange={e => onEdit('set_ducking', e.target.checked ? {} : { enabled: false }).catch(() => {})} /> Lower the music while people talk</label>
+      {duck && <Slider id="duck-amount" label="Music under speech" value={duck.amount} min={-30} max={-3} step={1} format={v => `${v} dB`} onLive={v => onEdit('set_ducking', { amount: v })} />}
+      <div className="row">
+        <button disabled={busy || !project.clips.length} onClick={() => normalize(-14)}>{busy ? 'Measuring…' : loud ? 'Re-measure loudness' : 'Normalize loudness (-14 LUFS)'}</button>
+        {loud && <button className="quiet" onClick={() => onEdit('set_loudness_off', {})}>Off</button>}
+      </div>
+      {loud && <p className="meta-line">Mix measured {loud.measured} LUFS → {loud.target} LUFS ({loud.gainDb >= 0 ? '+' : ''}{loud.gainDb} dB), peaks limited.</p>}
+      {err && <p className="meta-line danger">{err}</p>}
+    </div>
+  );
+}
 const secs = (v: number) => `${v.toFixed(1)}s`;
 
 interface Props { project: Project; selection: Selection; range: Range; onEdit: Edit; onSelect: (s: Selection) => void; onRange: (r: Range) => void }
@@ -93,6 +119,7 @@ export const Inspector = memo(function Inspector({ project, selection, range, on
             <Slider id="clip-fout" label="Fade out" value={c.fadeOut ?? 0} min={0} max={Math.min(3, len / 2)} step={0.1} format={secs} onLive={up('fadeOut')} />
           </div>
         </>}
+        {m?.hasAudio && <label className="check" htmlFor="clip-denoise"><input id="clip-denoise" type="checkbox" checked={!!c.denoise} onChange={e => onEdit('update_clip', { clipId: c.id, denoise: e.target.checked })} /> Reduce background noise <span className="meta-line">(on export)</span></label>}
         <div className="row actions">
           <button onClick={() => { const t = clock.get(); onEdit('split_clip', { clipId: c.id, at: t }); }} disabled={!(clock.get() > c.start && clock.get() < clipEnd(c))}>Split at playhead</button>
           <button className="danger" onClick={() => { onEdit('remove_clip', { clipId: c.id, ripple: true }); onSelect(null); }}>Delete</button>
@@ -118,8 +145,17 @@ export const Inspector = memo(function Inspector({ project, selection, range, on
             <input id="text-color" type="color" value={t.color ?? (t.style === 'caption' ? '#f0cf6a' : '#ffffff')} onChange={e => up('color')(e.target.value)} /></label>
         </div>
         <div className="row">
-          <div className="seg"><button aria-pressed={t.style === 'title'} onClick={() => up('style')('title')}>Title (top)</button><button aria-pressed={t.style === 'caption'} onClick={() => up('style')('caption')}>Caption (bottom)</button></div>
+          <div className="seg"><button aria-pressed={t.style === 'title'} onClick={() => up('style')('title')}>Title</button><button aria-pressed={t.style === 'caption'} onClick={() => up('style')('caption')}>Caption</button></div>
+          <div className="seg">{(['top', 'middle', 'bottom'] as const).map(p => <button key={p} aria-pressed={positionOf(t) === p} onClick={() => up('position')(p)}>{p}</button>)}</div>
         </div>
+        {t.style === 'caption' && <>
+          <div className="presets">
+            {(Object.keys(CAPTION_PRESETS) as (keyof typeof CAPTION_PRESETS)[]).map(k => (
+              <button key={k} className={`preset p-${k}${(t.preset ?? 'karaoke') === k ? ' on' : ''}`} onClick={() => up('preset')(k)}><b>Aa</b>{CAPTION_PRESETS[k].label}</button>
+            ))}
+          </div>
+          <button onClick={() => onEdit('set_caption_style', { preset: t.preset ?? 'karaoke', position: positionOf(t), color: t.color ?? '' })}>Use this look for all captions</button>
+        </>}
         <div className="row actions"><button className="danger" onClick={() => { onEdit('remove_text', { textId: t.id }); onSelect(null); }}>Delete</button></div>
       </div>
     );
@@ -198,6 +234,7 @@ export const Inspector = memo(function Inspector({ project, selection, range, on
       <div className="row">
         {presets.map(([label, w, h]) => <button key={label} className={project.width === w && project.height === h ? 'on' : ''} onClick={() => onEdit('set_canvas', { width: w, height: h })}>{label}</button>)}
       </div>
+      <AudioSettings project={project} onEdit={onEdit} />
       <p className="meta-line">Click anything on the timeline to edit it. Drag on the ruler to select a range, then cut it, change its volume, or leave a note for the agent.</p>
       <dl className="keys">
         <div><dt>Space</dt><dd>play / pause</dd></div>

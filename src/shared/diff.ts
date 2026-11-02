@@ -1,6 +1,8 @@
 import { COLLECTIONS, type Change, type Project } from './types.js';
 
 const key = (v: unknown) => JSON.stringify(v);
+const SETTINGS = ['name', 'width', 'height', 'fps', 'audio'] as const;
+const settingsOf = (p: Project) => Object.fromEntries(SETTINGS.map(k => [k, (p as any)[k]]));
 
 /** Entity-level diff between two project versions. */
 export function diff(a: Project, b: Project): Change[] {
@@ -16,10 +18,13 @@ export function diff(a: Project, b: Project): Change[] {
     }
     for (const [id, e] of after) if (!before.has(id)) out.push({ coll, id, after: e });
   }
+  const sa = settingsOf(a), sb = settingsOf(b);
+  if (key(sa) !== key(sb)) out.push({ coll: 'settings', id: 'project', before: sa, after: sb });
   return out;
 }
 
 function setEntity(p: Project, coll: Change['coll'], id: string, value: any) {
+  if (coll === 'settings') { for (const k of SETTINGS) (p as any)[k] = value?.[k]; return; }
   const list = p[coll] as any[];
   const idOf = (e: any) => (coll === 'transcripts' ? e.mediaId : e.id);
   const i = list.findIndex(e => idOf(e) === id);
@@ -29,6 +34,7 @@ function setEntity(p: Project, coll: Change['coll'], id: string, value: any) {
 }
 
 function getEntity(p: Project, coll: Change['coll'], id: string) {
+  if (coll === 'settings') return settingsOf(p);
   const idOf = (e: any) => (coll === 'transcripts' ? e.mediaId : e.id);
   return (p[coll] as any[]).find(e => idOf(e) === id);
 }

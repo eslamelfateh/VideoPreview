@@ -67,6 +67,14 @@ export function analyze(m: Media) {
           : await thumbs(m, path.join(MEDIA_DIR, file));
         store.setAssets(m.id, { thumbs: { file, ...t } });
       }
+      if (m.kind === 'video') {
+        // 540p (or smaller), a keyframe every half second: seeking and cuts are instant in the preview.
+        const file = `${m.id}.proxy.mp4`, h = Math.min(540, m.height ?? 540) - (Math.min(540, m.height ?? 540) % 2);
+        await run(FFMPEG, ['-v', 'error', '-y', '-i', mediaPath(m), '-vf', `scale=-2:${h}`, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '27',
+          '-g', '15', '-keyint_min', '15', '-sc_threshold', '0', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '96k', '-movflags', '+faststart', path.join(MEDIA_DIR, file)],
+          { maxBuffer: 1024 * 1024 });
+        store.setAssets(m.id, { proxy: { file, height: h } });
+      }
     } catch (e) {
       console.warn(`Could not analyze ${m.name}:`, (e as Error).message);
     }

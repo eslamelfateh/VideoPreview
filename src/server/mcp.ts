@@ -9,9 +9,9 @@ import type { Project } from '../shared/types.js';
 import { analyze } from './assets.js';
 import { importFile } from './media.js';
 import * as ops from './ops.js';
-import { audioLevels, renderContactSheet, renderJob, renderStill, startRender, type Quality } from './render.js';
+import { audioLevels, measureLoudness, renderContactSheet, renderJob, renderStill, startRender, type Quality } from './render.js';
 import { Hold, store, type EditOutcome, type StepResult } from './store.js';
-import { transcribe } from './transcribe.js';
+import { transcribe, transcriptionEngine } from './transcribe.js';
 
 const PUBLIC_URL = () => (process.env.PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? 4317}`).replace(/\/$/, '');
 const t3 = (x: number) => round(x, 3);
@@ -39,6 +39,7 @@ function summary(p: Project) {
     duration: duration(p),
     mode: store.control.mode,
     paused: store.control.paused,
+    transcription: transcriptionEngine(),
     media: p.media.map(m => ({ id: m.id, name: m.name, kind: m.kind, duration: m.duration, size: m.width ? `${m.width}x${m.height}` : undefined, hasAudio: m.hasAudio, transcript: p.transcripts.some(t => t.mediaId === m.id) })),
     counts: {
       videoClips: p.clips.filter(c => c.track === 'video').length, audioClips: p.clips.filter(c => c.track === 'audio').length,
@@ -76,7 +77,7 @@ const AGENT_OPS: Record<string, (d: Project, a: any) => StepResult> = {
   remove_silences: ops.removeSilences, add_captions: ops.addCaptions,
   add_text: ops.addText, update_text: ops.updateText, remove_text: ops.removeText,
   add_zoom: ops.addZoom, update_effect: ops.updateEffect, remove_effect: ops.removeEffect,
-  resolve_note: resolveNote, set_canvas: ops.setCanvas,
+  resolve_note: resolveNote, set_canvas: ops.setCanvas, set_ducking: ops.setDucking, set_denoise: ops.setDenoise, set_caption_style: ops.setCaptionStyle,
 };
 
 /* ---------- prompts ---------- */
@@ -301,7 +302,25 @@ export function createMcpServer(session?: McpSession): McpServer {
   editTool('update_clip', 'Update clip', 'Moves or trims a clip, or sets its volume (1 = original, 0.5 = half, 2 = double) and fade in/out seconds.', {
     clipId: z.string(), start: z.number().min(0).optional(), in: z.number().min(0).optional(), out: z.number().optional(),
     volume: z.number().min(0).max(2).optional(), fadeIn: z.number().min(0).optional(), fadeOut: z.number().min(0).optional(),
+    denoise: z.boolean().optional().describe('Background-noise reduction (applied on export)'),
   }, { idempotentHint: true }, ops.updateClip);
+
+  editTool('set_ducking', 'Duck music under speech', 'Turns the music (audio track) down automatically while people talk, following the transcript, and back up in pauses. Same curve in the preview and the export.', {
+    enabled: z.boolean().optional().describe('false turns it off'), amount: z.number().min(-40).max(-1).optional().describe('dB, default -12'),
+    attack: z.number().min(0).max(2).optional().describe('Seconds to fade down before speech, default 0.3'), release: z.number().min(0).max(3).optional().describe('Seconds to come back up, default 0.6'),
+  }, { idempotentHint: true }, ops.setDucking);
+
+  editTool('set_denoise', 'Reduce background noise', 'Turns noise reduction on or off for one clip, one track, or every clip with audio. Applied on export (and in get_audio_levels).', {
+    enabled: z.boolean(), clipId: z.string().optional(), track: z.enum(['video', 'audio']).optional(),
+  }, { idempotentHint: true }, ops.setDenoise);
+
+  reg('normalize_loudness', 'Normalize loudness', 'Measures the whole mix and sets a gain so it hits a loudness target (default -14 LUFS for TikTok/Reels/YouTube), with peaks limited to -1 dB. Re-run after big audio changes. off: true removes it.', {
+    target: z.number().min(-30).max(-6).optional(), off: z.boolean().optional(), ...DRY,
+  }, { idempotentHint: true, destructiveHint: false }, async ({ target, off, dry_run }) => {
+    if (off) return result(await store.editDetailed('normalize_loudness', { off }, d => ops.setLoudness(d, { off: true }), 'agent', { dryRun: !!dry_run }));
+    const measured = Math.round((await measureLoudness(store.project)) * 10) / 10;
+    return result(await store.editDetailed('normalize_loudness', { target }, d => ops.setLoudness(d, { target, measured }), 'agent', { dryRun: !!dry_run }));
+  }, EDIT_OUTPUT);
 
   editTool('set_volume', 'Set volume', 'Sets the volume over a timeline range (clips are split at the edges), or for one clip. 1 = original, 0 = mute, up to 2.', {
     volume: z.number().min(0).max(2), start: z.number().optional(), end: z.number().optional(),
@@ -320,12 +339,13 @@ export function createMcpServer(session?: McpSession): McpServer {
 
   /* ---------- transcript ---------- */
 
-  reg('transcribe', 'Transcribe', 'Transcribes speech in a media item with word timings (needs a speech-to-text key on the server). Required before captions, find_words and remove_silences.', {
+  reg('transcribe', 'Transcribe', 'Transcribes speech in a media item with word timings (local Whisper on the server, or a speech-to-text API). Required before captions, find_words and remove_silences. Long files take a while; progress is reported.', {
     mediaId: z.string(), language: z.string().optional().describe('e.g. "ar" for Arabic, "en"'),
-  }, { openWorldHint: true, destructiveHint: false, idempotentHint: true }, async ({ mediaId, language }) => {
+  }, { openWorldHint: true, destructiveHint: false, idempotentHint: true }, async ({ mediaId, language }, extra) => {
     await store.waitForTurn();
     const m = ops.getMedia(store.project, mediaId);
-    const tr = await transcribe(m, language);
+    const token = extra?._meta?.progressToken;
+    const tr = await transcribe(m, language, p => { if (token !== undefined) extra.sendNotification({ method: 'notifications/progress', params: { progressToken: token, progress: Math.round(p * 100), total: 100, message: 'Transcribing' } }).catch(() => {}); });
     return result(await store.editDetailed('transcribe', { mediaId, language }, d => {
       d.transcripts = d.transcripts.filter(t => t.mediaId !== mediaId).concat(tr);
       return { summary: `Transcribed ${m.name}: ${tr.words.length} words`, detail: tr.words.slice(0, 40).map(w => w.text).join(' ') + (tr.words.length > 40 ? ' …' : '') };
@@ -353,7 +373,14 @@ export function createMcpServer(session?: McpSession): McpServer {
     start: z.number().optional(), end: z.number().optional(),
     wordsPerCaption: z.number().int().min(1).max(8).optional().describe('Default 3'),
     color: z.string().optional().describe('Highlight color, e.g. #f0cf6a'),
+    preset: z.enum(['karaoke', 'box', 'pop', 'minimal', 'bold']).optional().describe('Look: karaoke (default, spoken word highlighted), box (dark box behind), pop (one big word at a time), minimal (small, no outline), bold (yellow, heavy)'),
+    position: z.enum(['bottom', 'middle', 'top']).optional().describe('Default bottom'),
   }, {}, ops.addCaptions);
+
+  editTool('set_caption_style', 'Caption style', 'Changes the look and position of all captions (or those in a range) in one step. Check the result with get_frame.', {
+    preset: z.enum(['karaoke', 'box', 'pop', 'minimal', 'bold']).optional(), position: z.enum(['bottom', 'middle', 'top']).optional(), color: z.string().optional().describe('Highlight color'),
+    start: z.number().optional(), end: z.number().optional(),
+  }, { idempotentHint: true }, ops.setCaptionStyle);
 
   editTool('add_text', 'Add text', 'Adds a text overlay. style "title" sits near the top in large type; "caption" sits near the bottom.', {
     text: z.string(), start: z.number().min(0), end: z.number(), style: z.enum(['title', 'caption']).optional(), color: z.string().optional(),
@@ -361,6 +388,7 @@ export function createMcpServer(session?: McpSession): McpServer {
 
   editTool('update_text', 'Update text', 'Edits a text overlay or caption (wording, timing, color, style).', {
     textId: z.string(), text: z.string().optional(), start: z.number().optional(), end: z.number().optional(), color: z.string().optional(), style: z.enum(['title', 'caption']).optional(),
+    preset: z.enum(['karaoke', 'box', 'pop', 'minimal', 'bold']).optional(), position: z.enum(['bottom', 'middle', 'top']).optional(),
   }, { idempotentHint: true }, ops.updateText);
 
   editTool('remove_text', 'Remove text', 'Removes one text overlay or caption, or all captions when textId is "all-captions".', {

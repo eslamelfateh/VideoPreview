@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { clipEnd, clipLen, duration, TEXT_LAYOUT as L } from '../shared/timeline.js';
+import { CAPTION_PRESETS, clipEnd, clipLen, DUCK_GAP, duration, POSITION_MARGIN, positionOf, presetOf, speechRegions, TEXT_LAYOUT as L } from '../shared/timeline.js';
 import type { Clip, Media, Project, TextItem, ZoomEffect } from '../shared/types.js';
 import { FFMPEG, mediaPath } from './media.js';
 import { EXPORT_DIR, store } from './store.js';
@@ -31,31 +31,44 @@ export function captionFrames(t: TextItem): { start: number; end: number; active
 }
 
 export function buildAss(p: Project): string {
-  const W = p.width, H = p.height, base = Math.min(W, H);
-  const cap = Math.round(base * L.captionSize), title = Math.round(base * L.titleSize), side = Math.round(W * L.side);
-  const style = (name: string, size: number, align: number, marginV: number, shadow: number) =>
-    `Style: ${name},${L.font},${size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,1,0,0,0,100,100,0,0,1,${Math.round(size * L.outline)},${shadow},${align},${side},${side},${marginV},1`;
-  const lines = [
-    '[Script Info]', 'ScriptType: v4.00+', `PlayResX: ${W}`, `PlayResY: ${H}`, 'WrapStyle: 0', 'ScaledBorderAndShadow: yes', '',
-    '[V4+ Styles]',
-    'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-    style('Caption', cap, 2, Math.round(H * L.captionBottom), Math.round(cap * 0.05)),
-    style('Title', title, 8, Math.round(H * L.titleTop), 0),
-    '', '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
-  ];
+  const W = p.width, H = p.height, base = Math.min(W, H), side = Math.round(W * L.side);
+  const ALIGN = { bottom: 2, middle: 5, top: 8 } as const;
+  const styles = new Map<string, string>();
+  const style = (name: string, size: number, outline: number, box: boolean, primary: string, pos: keyof typeof ALIGN) => {
+    if (!styles.has(name)) styles.set(name, `Style: ${name},${L.font},${size},${assColor(primary)},&H00FFFFFF,${box ? '&H60000000' : '&H00000000'},&H64000000,1,0,0,0,100,100,0,0,${box ? 3 : 1},${outline},${box ? 0 : Math.round(size * 0.05)},${ALIGN[pos]},${side},${side},${Math.round(H * POSITION_MARGIN[pos])},1`);
+    return name;
+  };
+  const events: string[] = [];
   for (const t of p.texts) {
+    const pos = positionOf(t);
     if (t.style === 'title') {
-      lines.push(`Dialogue: 1,${assTime(t.start)},${assTime(t.end)},Title,,0,0,0,,{\\c${assColor(t.color)}&}${assText(t.text)}`);
+      const size = Math.round(base * L.titleSize);
+      const st = style(`Title_${pos}`, size, Math.round(size * L.outline), false, '#ffffff', pos);
+      events.push(`Dialogue: 1,${assTime(t.start)},${assTime(t.end)},${st},,0,0,0,,{\\c${assColor(t.color)}&}${assText(t.text)}`);
       continue;
     }
+    const P = presetOf(t), preset = t.preset ?? 'karaoke';
+    const size = Math.round(base * P.size);
+    const st = style(`Cap_${preset}_${pos}`, size, Math.round(size * P.outline), P.box, P.base, pos);
+    const active = t.color ?? P.active ?? L.highlight;
+    const dim = P.dim < 1 ? `{\\alpha&H${Math.round((1 - P.dim) * 255).toString(16).padStart(2, '0').toUpperCase()}&}` : '';
     const words = t.words?.length ? t.words.map(w => w.text) : [t.text];
     for (const f of captionFrames(t)) {
       if (f.end <= f.start) continue;
-      const text = words.map((w, i) => i === f.active ? `{\\c${assColor(t.color ?? L.highlight)}&\\fscx${L.activeScale * 100}\\fscy${L.activeScale * 100}}${assText(w)}{\\r}` : assText(w)).join(' ');
-      lines.push(`Dialogue: 0,${assTime(f.start)},${assTime(f.end)},Caption,,0,0,0,,${text}`);
+      const on = (w: string) => `{\\c${assColor(active)}&\\alpha&H00&${P.activeScale !== 1 ? `\\fscx${Math.round(P.activeScale * 100)}\\fscy${Math.round(P.activeScale * 100)}` : ''}}${assText(w)}{\\r}`;
+      const text = P.oneWord && f.active >= 0
+        ? on(words[f.active])
+        : words.map((w, i) => (i === f.active ? on(w) : dim + assText(w) + (dim ? '{\\alpha&H00&}' : ''))).join(' ');
+      events.push(`Dialogue: 0,${assTime(f.start)},${assTime(f.end)},${st},,0,0,0,,${text}`);
     }
   }
-  return lines.join('\n') + '\n';
+  return [
+    '[Script Info]', 'ScriptType: v4.00+', `PlayResX: ${W}`, `PlayResY: ${H}`, 'WrapStyle: 0', 'ScaledBorderAndShadow: yes', '',
+    '[V4+ Styles]',
+    'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+    ...styles.values(), '', '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
+    ...events,
+  ].join('\n') + '\n';
 }
 
 /* ---------- zoom: zoompan only over the zoomed parts, the rest passes through untouched ---------- */
@@ -134,11 +147,23 @@ function gainExpr(run: Run, fps: number): string | null {
   return terms.length ? `max(0,1+${terms.join('+')})` : null;
 }
 
+/** The ducking curve (same as duckFactor in the preview) over a run, in the run's own time. */
+function duckExpr(p: Project, from: number, to: number): string | null {
+  const d = p.audio?.duck;
+  if (!d) return null;
+  const regions = speechRegions(p, DUCK_GAP).filter(([s, e]) => e + d.release > from && s - d.attack < to);
+  if (!regions.length) return null;
+  const T = `(t+${n(from)})`, f = Math.pow(10, d.amount / 20);
+  const a = Math.max(0.001, d.attack), r = Math.max(0.001, d.release);
+  const terms = regions.map(([s, e]) => `clip(min((${T}-${n(s - d.attack)})/${n(a)},(${n(e + d.release)}-${T})/${n(r)}),0,1)`);
+  return `(1-${n(1 - f)}*min(1,${terms.join('+')}))`;
+}
+
 /* ---------- full ffmpeg command ---------- */
 
 export type Quality = 'final' | 'draft';
 
-export type Output = { kind: 'mp4'; quality: Quality } | { kind: 'png'; width: number } | { kind: 'wav' };
+export type Output = { kind: 'mp4'; quality: Quality } | { kind: 'png'; width: number } | { kind: 'wav'; rate?: number; channels?: number };
 
 export function buildCommand(p: Project, out: string, assFile: string, quality: Quality | Output = 'final'): string[] {
   const o: Output = typeof quality === 'string' ? { kind: 'mp4', quality } : quality;
@@ -182,7 +207,10 @@ export function buildCommand(p: Project, out: string, assFile: string, quality: 
       if (wantA && m.hasAudio && run.segs.some(s => s.clip.volume > 0)) {
         const sel = single ? `atrim=end_sample=${frames * spf},` : `asetnsamples=n=${spf}:p=1,aselect='${pick(run.segs, first.iF)}',`;
         const gain = gainExpr(run, fps);
-        f.push(`[${i}:a]aresample=${SR},asetpts=N/SR/TB,${sel}asetpts=N/SR/TB${gain ? `,volume='${gain}':eval=frame` : ''},adelay=${Math.round(startT * 1000)}:all=1[a${i}]`);
+        const duck = track === 'audio' ? duckExpr(p, startT, startT + frames / fps) : null;
+        const vol = [gain, duck].filter(Boolean).join('*');
+        const clean = run.segs.some(s => s.clip.denoise) ? 'afftdn=nf=-25,' : '';
+        f.push(`[${i}:a]aresample=${SR},${clean}asetpts=N/SR/TB,${sel}asetpts=N/SR/TB${vol ? `,volume='${vol}':eval=frame` : ''},adelay=${Math.round(startT * 1000)}:all=1[a${i}]`);
         audio.push(`[a${i}]`);
       }
     }
@@ -215,14 +243,17 @@ export function buildCommand(p: Project, out: string, assFile: string, quality: 
   }
 
   if (!wantA) { /* image only */ }
-  else if (audio.length) f.push(`${audio.join('')}amix=inputs=${audio.length}:normalize=0:dropout_transition=0,apad=whole_dur=${n(D)},atrim=end=${n(D)}[aout]`);
+  else if (audio.length) {
+    const master = p.audio?.loudness ? `,volume=${n(p.audio.loudness.gainDb)}dB,alimiter=limit=0.891:level=false` : '';
+    f.push(`${audio.join('')}amix=inputs=${audio.length}:normalize=0:dropout_transition=0${master},apad=whole_dur=${n(D)},atrim=end=${n(D)}[aout]`);
+  }
   else f.push(`anullsrc=r=${SR}:cl=stereo,atrim=end=${n(D)}[aout]`);
 
   const script = out + '.filter';
   fs.writeFileSync(script, f.join(';\n'));
   args.push('-filter_complex_script', script);
   if (o.kind === 'png') args.push('-map', '[vout]', '-frames:v', '1', '-update', '1', out);
-  else if (o.kind === 'wav') args.push('-map', '[aout]', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', '-t', n(D), out);
+  else if (o.kind === 'wav') args.push('-map', '[aout]', '-ac', String(o.channels ?? 1), '-ar', String(o.rate ?? 16000), '-c:a', 'pcm_s16le', '-t', n(D), out);
   else args.push('-map', '[vout]', '-map', '[aout]',
     '-c:v', 'libx264', '-preset', o.quality === 'draft' ? 'ultrafast' : 'veryfast', '-crf', o.quality === 'draft' ? '25' : '20', '-r', String(fps),
     '-c:a', 'aac', '-b:a', '160k', '-t', n(D), '-movflags', '+faststart', out);
@@ -338,7 +369,7 @@ export async function renderContactSheet(p: Project, start: number, end: number,
     await runFfmpeg(['-v', 'error', '-y', ...files.flatMap(f => ['-i', f]), '-filter_complex', graph, '-frames:v', '1', out]);
     const png = fs.readFileSync(out);
     fs.rmSync(out, { force: true });
-    void rows;
+    void rows; void CAPTION_PRESETS;
     return { png, times };
   } finally { for (const f of files) if (f) fs.rmSync(f, { force: true }); }
 }
@@ -362,5 +393,26 @@ export async function audioLevels(p: Project, start: number, end: number, step: 
       out.push({ t: Math.round((start + i / 16000) * 100) / 100, rms: db(Math.sqrt(sum / Math.max(1, k))), peak: db(pk) });
     }
     return out;
+  } finally { for (const f of [ass, wav, wav + '.filter']) fs.rmSync(f, { force: true }); }
+}
+
+/** Integrated loudness of the mix in LUFS, without any loudness correction applied. */
+export async function measureLoudness(p: Project): Promise<number> {
+  const plain: Project = { ...p, texts: [], effects: [], audio: { ...p.audio, loudness: undefined } };
+  const base = tmpBase(), ass = base + '.ass', wav = base + '.wav';
+  fs.writeFileSync(ass, buildAss(plain));
+  try {
+    await runFfmpeg(buildCommand(plain, wav, ass, { kind: 'wav', rate: 48000, channels: 2 }));
+    const out = await new Promise<string>((resolve, reject) => {
+      const proc = spawn(FFMPEG, ['-hide_banner', '-nostats', '-i', wav, '-af', 'ebur128=framelog=quiet', '-f', 'null', '-']);
+      let err = '';
+      proc.stderr.on('data', (b: Buffer) => { err += b.toString(); });
+      proc.on('close', code => (code === 0 ? resolve(err) : reject(new Error('Loudness measurement failed.'))));
+    });
+    const m = /I:\s+(-?[\d.]+) LUFS/.exec(out.slice(out.lastIndexOf('Summary')));
+    if (!m) throw new Error('Could not measure loudness.');
+    const v = Number(m[1]);
+    if (!Number.isFinite(v) || v < -70) throw new Error('The mix is silent.');
+    return v;
   } finally { for (const f of [ass, wav, wav + '.filter']) fs.rmSync(f, { force: true }); }
 }

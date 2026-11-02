@@ -1,6 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { activeWord, clipAt, clipEnd, textsAt, TEXT_LAYOUT as L, zoomAt } from '../shared/timeline';
-import type { Clip, Project, ZoomEffect } from '../shared/types';
+import { activeWord, clipAt, clipEnd, duckFactor, masterGain, POSITION_MARGIN, positionOf, presetOf, textsAt, TEXT_LAYOUT as L, zoomAt } from '../shared/timeline';
+import type { TextItem } from '../shared/types';
+import type { Clip, MediaAssets, Project, ZoomEffect } from '../shared/types';
 import { clock, usePlaying, useTime } from './clock';
 
 const mediaUrl = (file: string) => `/media/${encodeURIComponent(file)}`;
@@ -38,6 +39,8 @@ function clipGain(c: Clip, t: number): number {
 
 interface Props {
   project: Project;
+  assets: Record<string, MediaAssets>;
+  speech: [number, number][];
   peeking: boolean;
   /** When a zoom is selected, clicking the frame moves its anchor. */
   anchorFor?: ZoomEffect;
@@ -49,7 +52,7 @@ interface Props {
  * Geometry mirrors the ffmpeg export: cover-fit video, zoom anchored the same way,
  * text sized as fractions of the canvas.
  */
-export const Preview = memo(function Preview({ project, peeking, anchorFor, onAnchor }: Props) {
+export const Preview = memo(function Preview({ project, assets, speech, peeking, anchorFor, onAnchor }: Props) {
   const time = useTime();
   const playing = usePlaying();
   const box = useRef<HTMLDivElement>(null);
@@ -87,7 +90,8 @@ export const Preview = memo(function Preview({ project, peeking, anchorFor, onAn
         continue;
       }
       const target = clip.in + (time - clip.start);
-      const g = gainFor(el), level = clipGain(clip, time);
+      // Same levels as the export: clip volume and fades, music ducking under speech, loudness gain.
+      const g = gainFor(el), level = clipGain(clip, time) * (clip.track === 'audio' ? duckFactor(project.audio, speech, time) : 1) * masterGain(project.audio);
       if (g) { g.gain.value = level; el.volume = 1; } else el.volume = Math.min(1, level);
       const drift = Math.abs(el.currentTime - target);
       if (playing) {
@@ -124,20 +128,12 @@ export const Preview = memo(function Preview({ project, peeking, anchorFor, onAn
           if (project.clips.some(c => c.mediaId === m.id && c.track === 'audio')) out.push(<audio key={`${m.id}:a`} src={mediaUrl(m.file)} preload="auto" ref={ref(`${m.id}:a`)} />);
           if (m.kind === 'video') for (const slot of [0, 1]) {
             const key = `${m.id}:${slot}`;
-            out.push(<video key={key} src={mediaUrl(m.file)} preload="auto" playsInline className={`media${vKey === key ? ' on' : ''}`} ref={ref(key)} />);
+            out.push(<video key={key} src={mediaUrl(assets[m.id]?.proxy?.file ?? m.file)} preload="auto" playsInline className={`media${vKey === key ? ' on' : ''}`} ref={ref(key)} />);
           }
           return out;
         })}
       </div>
-      {texts.map(t => t.style === 'title' ? (
-        <div key={t.id} className="ov title" dir="auto" style={{ top: project.height * L.titleTop * scale, fontSize: base * L.titleSize, color: t.color, WebkitTextStrokeWidth: base * L.titleSize * L.outline * 2, padding: pad }}>{t.text}</div>
-      ) : (
-        <div key={t.id} className="ov caption" style={{ bottom: project.height * L.captionBottom * scale, fontSize: base * L.captionSize, WebkitTextStrokeWidth: base * L.captionSize * L.outline * 2, padding: pad }}>
-          {t.words?.length
-            ? t.words.map((wd, i) => { const on = i === activeWord(t, time); return <span key={i} style={on ? { color: t.color ?? L.highlight, transform: `scale(${L.activeScale})` } : undefined}>{wd.text}</span>; })
-            : t.text}
-        </div>
-      ))}
+      {texts.map(t => <Overlay key={t.id} t={t} time={time} scale={scale} base={base} pad={pad} H={project.height} />)}
       {!v && <div className="empty-frame">{project.clips.length ? 'No video here' : 'Drop a video anywhere to start'}</div>}
       {z.scale > 1.001 && <div className="badge zoom">ZOOM {z.scale.toFixed(2)}×</div>}
       {peeking && <div className="badge before">BEFORE</div>}
@@ -146,3 +142,28 @@ export const Preview = memo(function Preview({ project, peeking, anchorFor, onAn
     </div>
   );
 });
+
+/** One caption or title, drawn the way the export draws it (see buildAss). */
+function Overlay({ t, time, scale, base, pad, H }: { t: TextItem; time: number; scale: number; base: number; pad: string; H: number }) {
+  const pos = positionOf(t);
+  const place: React.CSSProperties = pos === 'middle' ? { top: '50%', transform: 'translateY(-50%)' } : pos === 'top' ? { top: H * POSITION_MARGIN.top * scale } : { bottom: H * POSITION_MARGIN.bottom * scale };
+  if (t.style === 'title') {
+    const size = base * L.titleSize;
+    return <div className="ov title" dir="auto" style={{ ...place, fontSize: size / L.lineEm, lineHeight: L.lineEm, color: t.color, WebkitTextStrokeWidth: size * L.outline * 2, padding: pad }}>{t.text}</div>;
+  }
+  const P = presetOf(t);
+  const size = base * P.size;
+  const activeColor = t.color ?? P.active ?? L.highlight;
+  const k = activeWord(t, time);
+  const words = t.words?.length ? t.words.map(w => w.text) : [t.text];
+  const shown = P.oneWord && k >= 0 ? [k] : words.map((_, i) => i);
+  const inner = shown.map(i => {
+    const on = i === k && t.words?.length;
+    return <span key={i} style={on ? { color: activeColor, transform: P.activeScale !== 1 ? `scale(${P.activeScale})` : undefined } : { opacity: P.dim }}>{words[i]}</span>;
+  });
+  return (
+    <div className={`ov caption${P.box ? ' boxed' : ''}`} style={{ ...place, fontSize: size / L.lineEm, lineHeight: L.lineEm, color: P.base, WebkitTextStrokeWidth: P.box ? 0 : size * P.outline * 2, padding: pad, textShadow: P.outline === 0 ? `0 ${size * 0.05}px ${size * 0.1}px #000a` : undefined }}>
+      {P.box ? <span className="box" style={{ padding: `0 ${size * P.outline}px` }}>{inner}</span> : inner}
+    </div>
+  );
+}

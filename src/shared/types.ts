@@ -26,6 +26,7 @@ export interface Clip {
   volume: number; // 0..2
   fadeIn?: number; // seconds
   fadeOut?: number; // seconds
+  denoise?: boolean; // background-noise reduction on export
 }
 
 export interface Word {
@@ -35,6 +36,8 @@ export interface Word {
 }
 
 export type TextStyle = 'caption' | 'title';
+export type CaptionPreset = 'karaoke' | 'box' | 'pop' | 'minimal' | 'bold';
+export type TextPosition = 'bottom' | 'middle' | 'top';
 
 export interface TextItem {
   id: string;
@@ -45,6 +48,8 @@ export interface TextItem {
   /** Present on captions: per-word timing (timeline seconds) drives the karaoke highlight. */
   words?: Word[];
   color?: string; // highlight color for captions, text color for titles
+  preset?: CaptionPreset; // captions only; default karaoke
+  position?: TextPosition; // default bottom for captions, top for titles
 }
 
 export interface ZoomEffect {
@@ -81,6 +86,12 @@ export interface Marker {
   reply?: string; // what the agent did about it
 }
 
+/** Project-wide audio: music ducking under speech and loudness normalization. */
+export interface ProjectAudio {
+  duck?: { amount: number; attack: number; release: number }; // amount in dB (negative); speech comes from the transcript
+  loudness?: { target: number; gainDb: number; measured: number }; // LUFS
+}
+
 export interface Project {
   name: string;
   width: number;
@@ -92,10 +103,12 @@ export interface Project {
   effects: Effect[];
   transcripts: Transcript[];
   markers: Marker[];
+  audio?: ProjectAudio;
 }
 
 export const COLLECTIONS = ['media', 'clips', 'texts', 'effects', 'transcripts', 'markers'] as const;
-export type Collection = (typeof COLLECTIONS)[number];
+/** 'settings' is the project's own fields (canvas, fps, audio), tracked like an entity so undo covers them. */
+export type Collection = (typeof COLLECTIONS)[number] | 'settings';
 
 /** One entity that a step added, removed or changed. */
 export interface Change {
@@ -141,6 +154,8 @@ export interface RenderState {
 export interface MediaAssets {
   thumbs?: { file: string; count: number; interval: number; width: number; height: number };
   peaks?: { file: string; perSecond: number };
+  /** Small, fast-seeking copy for the preview; exports always use the original. */
+  proxy?: { file: string; height: number };
 }
 
 /** A question the agent asked the user, answered in the editor. */
@@ -155,6 +170,8 @@ export interface Question {
 export interface ServerState {
   project: Project;
   questions: Question[];
+  /** Speech regions on the timeline (from the transcript), for previewing ducking. */
+  speech: [number, number][];
   assets: Record<string, MediaAssets>;
   steps: Step[];
   control: Control;

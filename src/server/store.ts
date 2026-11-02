@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { applyChanges, clone, conflicts, diff } from '../shared/diff.js';
-import { clipEnd, fmtTime } from '../shared/timeline.js';
+import { clipEnd, DUCK_GAP, fmtTime, speechRegions } from '../shared/timeline.js';
 import type { Change, Control, MediaAssets, Project, Question, RenderState, ServerState, Step } from '../shared/types.js';
 
 export const DATA_DIR = path.resolve(process.env.LIVECUT_DATA ?? 'data');
@@ -77,10 +77,17 @@ class Store {
       project: { ...this.project, transcripts: this.project.transcripts.map(t => ({ mediaId: t.mediaId, language: t.language, words: [] })) },
       assets: this.assets,
       questions: this.questions.map(({ resolve: _r, ...q }) => q),
+      speech: this.speechCache(),
       steps: this.steps.map(st => (st.changes.some(c => c.coll === 'transcripts') ? { ...st, changes: st.changes.map(slim) } : st)),
       control: this.control, render: this.render,
       notes: this.notes, agentConnected: Date.now() - this.lastAgentSeen < 90_000,
     };
+  }
+
+  private speechMemo: { project: Project | null; regions: [number, number][] } = { project: null, regions: [] };
+  speechCache(): [number, number][] {
+    if (this.speechMemo.project !== this.project) this.speechMemo = { project: this.project, regions: this.project.audio?.duck ? speechRegions(this.project, DUCK_GAP) : [] };
+    return this.speechMemo.regions;
   }
 
   setAssets(mediaId: string, a: MediaAssets) { this.assets[mediaId] = { ...this.assets[mediaId], ...a }; this.changed(); }

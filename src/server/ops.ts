@@ -1,5 +1,6 @@
 import { clipEnd, clipLen, duration, fmtTime, round, timelineWords, trackEnd } from '../shared/timeline.js';
-import type { Clip, Marker, Media, Project, TextItem, Track, Word, ZoomEffect } from '../shared/types.js';
+import type { CaptionPreset, Clip, Marker, Media, Project, TextItem, TextPosition, Track, Word, ZoomEffect } from '../shared/types.js';
+import { CAPTION_PRESETS } from '../shared/timeline.js';
 import { newId, type StepResult } from './store.js';
 
 /**
@@ -56,10 +57,11 @@ export function addClip(d: Project, a: { mediaId: string; track?: Track; start?:
   return { summary: `Added ${m.name} to ${track} at ${fmtTime(c.start)} (${t3(clipLen(c))}s)`, at: c.start, detail: `clipId: ${c.id}` };
 }
 
-export function updateClip(d: Project, a: { clipId: string; start?: number; in?: number; out?: number; volume?: number; fadeIn?: number; fadeOut?: number }): StepResult {
+export function updateClip(d: Project, a: { clipId: string; start?: number; in?: number; out?: number; volume?: number; fadeIn?: number; fadeOut?: number; denoise?: boolean }): StepResult {
   const c = getClip(d, a.clipId);
   const m = getMedia(d, c.mediaId);
   const parts: string[] = [];
+  if (typeof a.denoise === 'boolean') { c.denoise = a.denoise || undefined; parts.push(`noise reduction ${a.denoise ? 'on' : 'off'}`); }
   for (const k of ['start', 'in', 'out', 'volume', 'fadeIn', 'fadeOut'] as const) {
     const v = opt(a[k], k);
     if (v === undefined) continue;
@@ -196,13 +198,14 @@ function buildCaptions(words: Word[], perCaption: number, color?: string): TextI
   return out;
 }
 
-export function addCaptions(d: Project, a: { start?: number; end?: number; wordsPerCaption?: number; color?: string }): StepResult {
+export function addCaptions(d: Project, a: { start?: number; end?: number; wordsPerCaption?: number; color?: string; preset?: CaptionPreset; position?: TextPosition }): StepResult {
   const start = opt(a.start, 'start') ?? 0, end = opt(a.end, 'end') ?? Infinity;
   const per = Math.max(1, Math.min(8, Math.round(opt(a.wordsPerCaption, 'wordsPerCaption') ?? 3)));
   const ws = timelineWords(d).filter(w => w.start >= start && w.start < end);
   if (!ws.length) throw new Error('No transcript words in that range. Call transcribe first.');
   d.texts = d.texts.filter(t => !(t.style === 'caption' && t.start >= start && t.start < end));
-  const caps = buildCaptions(ws, per, a.color);
+  const preset = a.preset;
+  const caps = buildCaptions(ws, preset === 'pop' && a.wordsPerCaption === undefined ? 1 : per, a.color).map(c => ({ ...c, ...(a.preset && a.preset !== 'karaoke' ? { preset: a.preset } : {}), ...(a.position && a.position !== 'bottom' ? { position: a.position } : {}) }));
   d.texts.push(...caps);
   return { summary: `Added ${caps.length} captions (${ws.length} words)`, at: caps[0].start };
 }
@@ -218,7 +221,7 @@ export function addText(d: Project, a: { text: string; start: number; end: numbe
   return { summary: `Added ${t.style} "${t.text}" at ${fmtTime(t.start)}`, at: t.start, detail: `textId: ${t.id}` };
 }
 
-export function updateText(d: Project, a: { textId: string; text?: string; start?: number; end?: number; color?: string; style?: 'title' | 'caption' }): StepResult {
+export function updateText(d: Project, a: { textId: string; text?: string; start?: number; end?: number; color?: string; style?: 'title' | 'caption'; preset?: CaptionPreset; position?: TextPosition }): StepResult {
   const t = getText(d, a.textId);
   if (a.text !== undefined && a.text !== t.text) {
     if (!String(a.text).trim()) throw new Error('Text is empty.');
@@ -239,7 +242,24 @@ export function updateText(d: Project, a: { textId: string; text?: string; start
   if (t.end - t.start < 0.05) throw new Error('end must be after start.');
   if (a.color !== undefined) t.color = a.color || undefined;
   if (a.style) t.style = a.style;
+  if (a.preset) { if (!CAPTION_PRESETS[a.preset]) throw new Error(`Unknown caption style ${a.preset}.`); t.preset = a.preset === 'karaoke' ? undefined : a.preset; }
+  if (a.position) t.position = a.position;
   return { summary: `Edited text "${t.text}"`, at: t.start };
+}
+
+/** Changes the look of every caption (or those in a range) at once. */
+export function setCaptionStyle(d: Project, a: { preset?: CaptionPreset; position?: TextPosition; color?: string; start?: number; end?: number }): StepResult {
+  if (a.preset && !CAPTION_PRESETS[a.preset]) throw new Error(`Unknown caption style ${a.preset}. Use: ${Object.keys(CAPTION_PRESETS).join(', ')}.`);
+  const s = opt(a.start, 'start') ?? -Infinity, e = opt(a.end, 'end') ?? Infinity;
+  const caps = d.texts.filter(t => t.style === 'caption' && t.start >= s && t.start < e);
+  if (!caps.length) throw new Error('No captions to restyle. Add captions first.');
+  for (const t of caps) {
+    if (a.preset) t.preset = a.preset === 'karaoke' ? undefined : a.preset;
+    if (a.position) t.position = a.position === 'bottom' ? undefined : a.position;
+    if (a.color !== undefined) t.color = a.color || undefined;
+  }
+  const what = [a.preset && `${CAPTION_PRESETS[a.preset].label} style`, a.position && `at the ${a.position}`, a.color && `highlight ${a.color}`].filter(Boolean).join(', ');
+  return { summary: `Captions: ${what || 'no change'} (${caps.length})`, at: caps[0].start };
 }
 
 export function removeText(d: Project, a: { textId: string }): StepResult {
@@ -323,11 +343,40 @@ export function setCanvas(d: Project, a: { width: number; height: number; fps?: 
   return { summary: `Canvas ${d.width}×${d.height} @ ${d.fps}fps` };
 }
 
+/* ---------- project audio ---------- */
+
+export function setDucking(d: Project, a: { enabled?: boolean; amount?: number; attack?: number; release?: number }): StepResult {
+  if (a.enabled === false) { d.audio = { ...d.audio, duck: undefined }; return { summary: 'Music ducking off' }; }
+  if (!d.transcripts.some(t => t.words.length)) throw new Error('Ducking follows the speech in the transcript. Transcribe first (or set_transcript).');
+  if (!d.clips.some(c => c.track === 'audio')) throw new Error('There is no music on the audio track to duck.');
+  const amount = Math.max(-40, Math.min(-1, opt(a.amount, 'amount') ?? -12));
+  const attack = Math.max(0, Math.min(2, opt(a.attack, 'attack') ?? 0.3)), release = Math.max(0, Math.min(3, opt(a.release, 'release') ?? 0.6));
+  d.audio = { ...d.audio, duck: { amount, attack, release } };
+  return { summary: `Music ducks ${amount} dB while people talk (in ${attack}s, out ${release}s)` };
+}
+
+export function setDenoise(d: Project, a: { enabled: boolean; clipId?: string; track?: Track }): StepResult {
+  const hit = a.clipId ? [getClip(d, a.clipId)] : d.clips.filter(c => !a.track || c.track === a.track);
+  const withAudio = hit.filter(c => getMedia(d, c.mediaId).hasAudio);
+  if (!withAudio.length) throw new Error('No clips with audio to clean.');
+  for (const c of withAudio) c.denoise = a.enabled ? true : undefined;
+  return { summary: `Noise reduction ${a.enabled ? 'on' : 'off'} for ${withAudio.length} clip(s) (applied on export)` };
+}
+
+/** Stores a loudness correction measured from the mix (see render.measureLoudness). */
+export function setLoudness(d: Project, a: { target?: number; measured?: number; off?: boolean }): StepResult {
+  if (a.off) { d.audio = { ...d.audio, loudness: undefined }; return { summary: 'Loudness normalization off' }; }
+  const target = Math.max(-30, Math.min(-6, opt(a.target, 'target') ?? -14)), measured = num(a.measured, 'measured');
+  const gainDb = Math.round(Math.max(-20, Math.min(20, target - measured)) * 10) / 10;
+  d.audio = { ...d.audio, loudness: { target, gainDb, measured } };
+  return { summary: `Loudness ${measured} → ${target} LUFS (${gainDb >= 0 ? '+' : ''}${gainDb} dB, peaks limited to -1 dB)` };
+}
+
 /** Operations the editor UI may call directly (each becomes a user step). */
 export const USER_OPS: Record<string, (d: Project, a: any) => StepResult> = {
   update_clip: updateClip, split_clip: splitClip, remove_clip: removeClip, cut_range: cutRange, set_volume: setVolume,
   add_text: addText, update_text: updateText, remove_text: removeText,
   add_zoom: addZoom, update_effect: updateEffect, remove_effect: removeEffect,
   add_note: addMarker, update_note: updateMarker, remove_note: removeMarker,
-  set_canvas: setCanvas, add_clip: addClip,
+  set_canvas: setCanvas, add_clip: addClip, set_ducking: setDucking, set_denoise: setDenoise, set_caption_style: setCaptionStyle, set_loudness_off: (d: Project) => setLoudness(d, { off: true }),
 };

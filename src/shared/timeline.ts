@@ -1,4 +1,4 @@
-import type { Clip, Effect, Project, TextItem, Word } from './types.js';
+import type { CaptionPreset, Clip, Effect, Project, ProjectAudio, TextItem, TextPosition, Word } from './types.js';
 
 export const round = (n: number, d = 3) => Math.round(n * 10 ** d) / 10 ** d;
 export const clipLen = (c: Clip) => c.out - c.in;
@@ -83,6 +83,8 @@ export const TEXT_LAYOUT = {
   outline: 0.09, // of font size
   activeScale: 1.12,
   highlight: '#f0cf6a',
+  /** libass sizes text by the font's full height (OS/2 win ascent + descent); for Cairo that is 1.883 em. */
+  lineEm: 1.883,
 };
 
 /** Index of the highlighted word in a caption at time t (same rule as the export). */
@@ -91,3 +93,53 @@ export function activeWord(t: TextItem, time: number): number {
   for (let i = ws.length - 1; i >= 0; i--) if (time >= (i === 0 ? t.start : ws[i].start)) return i;
   return -1;
 }
+
+/** Where people talk on the timeline: transcript words merged across short gaps. */
+export function speechRegions(p: Project, gap: number): [number, number][] {
+  const out: [number, number][] = [];
+  for (const w of timelineWords(p)) {
+    const last = out[out.length - 1];
+    if (last && w.start - last[1] < gap) last[1] = Math.max(last[1], w.end);
+    else out.push([w.start, w.end]);
+  }
+  return out.map(([a, b]) => [round(a), round(b)]);
+}
+
+/**
+ * How much the music is turned down at t (1 = untouched). The music ramps down over
+ * `attack` before speech, stays down, and comes back over `release` after it.
+ * The export builds the same curve as an ffmpeg expression.
+ */
+export const DUCK_GAP = 0.8;
+
+export function duckFactor(audio: ProjectAudio | undefined, regions: [number, number][], t: number): number {
+  const d = audio?.duck;
+  if (!d || !regions.length) return 1;
+  const f = Math.pow(10, d.amount / 20);
+  let w = 0;
+  for (const [s, e] of regions) {
+    if (t < s - d.attack || t > e + d.release) continue;
+    const up = d.attack > 0 ? Math.min(1, (t - (s - d.attack)) / d.attack) : 1;
+    const down = d.release > 0 ? Math.min(1, ((e + d.release) - t) / d.release) : 1;
+    w = Math.max(w, Math.max(0, Math.min(up, down)));
+  }
+  return 1 - (1 - f) * w;
+}
+
+export const masterGain = (audio: ProjectAudio | undefined) => (audio?.loudness ? Math.pow(10, audio.loudness.gainDb / 20) : 1);
+
+/**
+ * Caption looks, used by both the preview (CSS) and the export (ASS).
+ * size: fraction of min(width, height); outline: fraction of the font size.
+ */
+export const CAPTION_PRESETS: Record<CaptionPreset, { label: string; size: number; outline: number; box: boolean; oneWord: boolean; dim: number; activeScale: number; base: string; active?: string }> = {
+  karaoke: { label: 'Karaoke', size: 0.1, outline: 0.09, box: false, oneWord: false, dim: 1, activeScale: 1.12, base: '#ffffff' },
+  box: { label: 'Box', size: 0.085, outline: 0.22, box: true, oneWord: false, dim: 1, activeScale: 1, base: '#ffffff' },
+  pop: { label: 'One word', size: 0.14, outline: 0.1, box: false, oneWord: true, dim: 1, activeScale: 1, base: '#ffffff' },
+  minimal: { label: 'Minimal', size: 0.07, outline: 0, box: false, oneWord: false, dim: 0.6, activeScale: 1, base: '#ffffff', active: '#ffffff' },
+  bold: { label: 'Bold', size: 0.115, outline: 0.12, box: false, oneWord: false, dim: 1, activeScale: 1.15, base: '#f0cf6a', active: '#ffffff' },
+};
+export const presetOf = (t: TextItem) => CAPTION_PRESETS[t.preset ?? 'karaoke'] ?? CAPTION_PRESETS.karaoke;
+export const positionOf = (t: TextItem): TextPosition => t.position ?? (t.style === 'title' ? 'top' : 'bottom');
+/** Distance from the top (for top) or bottom (for bottom), as a fraction of the height. */
+export const POSITION_MARGIN = { bottom: 0.2, top: 0.14, middle: 0 } as const;

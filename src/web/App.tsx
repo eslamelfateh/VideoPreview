@@ -154,7 +154,7 @@ export function App() {
         <section className="editor">
           <div className="stage-row">
             <div className="stage"><div className="fit">
-              <Preview project={project} peeking={!!peekStep} anchorFor={zoomSel} onAnchor={onAnchor} />
+              <Preview project={project} assets={state.assets} speech={state.speech} peeking={!!peekStep} anchorFor={zoomSel} onAnchor={onAnchor} />
             </div></div>
             <Inspector project={project} selection={selection} range={range} onEdit={edit} onSelect={onSelect} onRange={onRange} />
           </div>
